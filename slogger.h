@@ -3,13 +3,17 @@
 
 #include <stdio.h>
 #include <pthread.h>
+#include <netinet/in.h>
 
 #define MAX_FILE_NAME 64
 #define DEFAULT_MAX_FILE_SIZE 1048576L
 
 enum {
     CONSOLELOGGER = 1 << 0,
-    FILELOGGER    = 1 << 1
+
+    FILELOGGER    = 1 << 1,
+
+    NETWORKLOGGER = 1 << 2
 };
 
 typedef enum LogLevel {
@@ -32,6 +36,12 @@ typedef struct ConsoleLog {
     log_level_t level;
 } ConsoleLog;
 
+typedef struct NetworkLog{
+  int sockfd;
+  struct addrinfo* addr;
+  log_level_t level;
+}NetworkLog;
+
 void set_log_level(log_level_t level);
 log_level_t get_log_level(void);
 
@@ -40,6 +50,8 @@ void free_console_log(ConsoleLog* cl);
 
 FileLog* init_fileLog(const char* filename, long maxFileSize);
 void free_file_log(FileLog* fl);
+
+NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level);
 
 void log_message(log_level_t level, const char* message);
 void clear_log_file(const char* filename);
