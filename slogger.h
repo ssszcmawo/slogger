@@ -7,6 +7,7 @@
 
 #define MAX_FILE_NAME 64
 #define DEFAULT_MAX_FILE_SIZE 1048576L
+#define MAX_BUF_SIZE 4096
 
 enum {
     CONSOLELOGGER = 1 << 0,
@@ -39,6 +40,8 @@ typedef struct ConsoleLog {
 typedef struct NetworkLog{
   int sockfd;
   struct addrinfo* addr;
+  char buf[MAX_BUF_SIZE];
+  size_t len;
   log_level_t level;
 }NetworkLog;
 
@@ -52,6 +55,7 @@ FileLog* init_fileLog(const char* filename, long maxFileSize);
 void free_file_log(FileLog* fl);
 
 NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level);
+int network_log(NetworkLog* nl,char* message);
 
 void log_message(log_level_t level, const char* message);
 void clear_log_file(const char* filename);
