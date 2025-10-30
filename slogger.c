@@ -179,6 +179,7 @@ NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level)
   nl->sockfd = sockfd;
   nl->addr = servinfo;
   nl->level = level;
+  nl->len = 0;
 
   g_network = nl;
 
@@ -189,7 +190,65 @@ NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level)
   return nl;
 }
 
+int network_log(NetworkLog* nl,char* message){
+  if(!nl || !message) return -1;
 
+  size_t len = strlen(message);
+  ssize_t sent;
+
+retry_send:
+  sent = send(nl->sockfd,message,len,0);
+  if(sent == -1){
+    perror("send");
+
+    if(errno == ECONNRESET || errno == EPIPE){
+      close(nl->sockfd);
+
+      struct addrinfo* p;
+      int sockfd = -1;
+
+      for(p = nl->addr; p != NULL; p = p->ai_next){
+
+        sockfd = socket(p->ai_family,p->ai_socktype,p->ai_protocol);
+
+        if(sockfd == -1) continue;
+
+        if(connect(sockfd,p->ai_addr,p->ai_addrlen) == -1){
+          close(sockfd);
+          sockfd = -1;
+          continue;
+        }
+
+        break;
+
+      }
+
+      if(sockfd == -1){
+        fprintf(stderr, "network_log: failed to reconnect\n");
+        return -1;
+      }
+
+      nl->sockfd = sockfd;
+      goto retry_send;
+    }
+    return -1;
+  }
+
+  if((size_t)sent < len){
+    message += sent;
+    len -= sent;
+    goto retry_send;
+  }
+
+  return 0;
+}
+
+static void flush_buffer(NetworkLog* nl){
+  if(nl->len > 0){
+    send(nl->sockfd,nl->buf,nl->len,0);
+    nl->len = 0;
+  }
+}
 
 void free_network_log(NetworkLog* nl){
   if(!nl) return;
@@ -243,8 +302,11 @@ void log_message(log_level_t level, const char* message) {
         g_file->currentFileSize += size;
         fflush(g_file->output);
     }
-  if(logger_type & CONSOLELOGGER && g_console){
-
+  if(logger_type & NETWORKLOGGER && g_network){
+    g_network->len += snprintf(g_network->buf + g_network->len,sizeof(g_network->buf) - g_network->len,
+                               "%s [%s] [T%ld] %s\n",timestamp,level_to_string(level),tid,message);
+    network_log(g_network,g_network->buf);
+    flush_buffer(g_network); 
   }
 
     unlock();
