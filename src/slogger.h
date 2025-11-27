@@ -8,13 +8,23 @@
 #define MAX_FILE_NAME 64
 #define DEFAULT_MAX_FILE_SIZE 1048576L
 #define MAX_BUF_SIZE 4096
+#define DEFAULT_MAX_BACKUP_FILES 10
+
+#define COLOR_RESET   "\033[0m"
+#define COLOR_RED     "\033[31m"
+#define COLOR_GREEN   "\033[32m"
+#define COLOR_YELLOW  "\033[33m"
+#define COLOR_BLUE    "\033[34m"
 
 enum {
     CONSOLELOGGER = 1 << 0,
 
     FILELOGGER    = 1 << 1,
 
-    NETWORKLOGGER = 1 << 2
+    NETWORKLOGGER = 1 << 2,
+
+    maxLineLen = 256,
+
 };
 
 typedef enum LogLevel {
@@ -30,6 +40,7 @@ typedef struct FileLog {
     long maxFileSize;
     long currentFileSize;
     log_level_t level;
+    int maxBackUpFiles;
 } FileLog;
 
 typedef struct ConsoleLog {
