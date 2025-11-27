@@ -16,7 +16,7 @@
 static log_level_t current_log_level = INFO;
 static pthread_mutex_t l_mutex;
 static volatile int logger_initialized = 0;
-static volatile int logger_type = 0;
+static volatile int logger_type;
 
 static ConsoleLog* g_console = NULL;
 static FileLog* g_file = NULL;
@@ -38,6 +38,11 @@ static void ensure_init(void) {
     if (logger_initialized) return;
     pthread_mutex_init(&l_mutex, NULL);
     logger_initialized = 1;
+}
+
+static int hasFlag(int flags, int flag)
+{
+    return (flags & flag) == flag;
 }
 
 static void *get_in_addr(struct sockaddr* sa){
@@ -103,16 +108,30 @@ FileLog* init_fileLog(const char* filename, long maxFileSize) {
 
     FileLog* fl = calloc(1, sizeof(FileLog));
 
+  if(!fl){
+    unlock();
+    return NULL;
+  }
+
     strncpy(fl->fileName, filename, MAX_FILE_NAME - 1);
+    fl->fileName[MAX_FILE_NAME - 1] = '\0';
 
     fl->maxFileSize = (maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE);
     fl->output = fopen(filename, "a");
+    if(fl->output == NULL){
+      fprintf(stderr,"ERROR: Failed to open file: %s\n",filename);
+      free(fl);
+      unlock();
+      return NULL;
+  }
 
     fseek(fl->output, 0, SEEK_END);
     fl->currentFileSize = ftell(fl->output);
 
     g_file = fl;
     logger_type |= FILELOGGER;
+
+    fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
 
     unlock();
 
@@ -128,10 +147,57 @@ static int is_FileExists(const char* filename){
     return 0;
 
   }else{
-
+    fclose(fp);
     return 1;
 
   }
+
+}
+void getBackUpFileName(const char* baseName,int index,char* out,size_t outSize){
+  if(index <= 0){
+    snprintf(out,outSize,"%s",baseName);
+  }else {
+    snprintf(out,outSize,"%s.%d",baseName,index);
+  }
+}
+
+int rotateFiles(){
+  int i; 
+
+  char src[MAX_FILE_NAME + 5];
+  char dst[MAX_FILE_NAME + 5];
+
+  if(g_file->currentFileSize < g_file->maxFileSize){
+    return g_file->output != NULL;
+  }
+
+  fclose(g_file->output);
+
+  for(i = (int)g_file->maxBackUpFiles;i > 0;i--){
+    getBackUpFileName(g_file->fileName,i - 1,src,sizeof(src));
+    getBackUpFileName(g_file->fileName,i,dst,sizeof(dst));
+    if(is_FileExists(dst)){
+      if(remove(dst) != 0){
+        fprintf(stderr,"ERROR: Failed to remove file: %s\n",dst);
+      }
+    }
+    if(is_FileExists(src)){
+      if(rename(src,dst) != 0){
+        fprintf(stderr,"ERROR: Failed to rename file: %s -> %s\n",src,dst);
+      }
+    }
+  }
+
+  g_file->output = fopen(g_file->fileName,"a");
+  if(g_file->output == NULL){
+    fprintf(stderr,"ERROR: Failed to open file: %s\n",g_file->fileName);
+    return 0;
+  }
+
+    fseek(g_file->output, 0, SEEK_END);
+    g_file->currentFileSize = ftell(g_file->output);
+
+    return 1;
 
 }
 
@@ -151,8 +217,8 @@ NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level)
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
 
-  if((rv == getaddrinfo(host,port,&hints,&servinfo)) != 0){
-    fprintf(stderr,"getaddinfo: %s",gai_strerror(rv));
+  if((rv = getaddrinfo(host,port,&hints,&servinfo)) != 0){
+    fprintf(stderr,"getaddinfo: %s\n",gai_strerror(rv));
 
     free(nl);
 
@@ -293,6 +359,15 @@ void free_file_log(FileLog* fl) {
     g_file = NULL;
 }
 
+static const char* level_to_color(log_level_t lvl) {
+    switch (lvl) {
+        case DEBUG:   return COLOR_BLUE;
+        case WARNING: return COLOR_YELLOW;
+        case ERROR:   return COLOR_RED;
+        default:      return COLOR_GREEN;
+    }
+}
+
 void log_message(log_level_t level, const char* message) {
     if (level < current_log_level) return;
 
@@ -303,21 +378,20 @@ void log_message(log_level_t level, const char* message) {
     format_timestamp(timestamp, sizeof(timestamp));
     long tid = getCurrentThreadID();
 
-    if (logger_type & CONSOLELOGGER && g_console) {
-        fprintf(g_console->output, "%s [%s] [T%ld] %s\n", timestamp, level_to_string(level), tid, message);
+    if (hasFlag(logger_type,CONSOLELOGGER)) {
+        const char* color = level_to_color(level);
+        fprintf(g_console->output, "%s%s [%s] [T%ld] %s%s\n",color, timestamp, level_to_string(level), tid, message,COLOR_RESET);
         fflush(g_console->output);
     }
 
-    if (logger_type & FILELOGGER && g_file) {
-        if (g_file->currentFileSize >= g_file->maxFileSize) {
-            freopen(g_file->fileName, "w", g_file->output);
-            g_file->currentFileSize = 0;
-        }
-        long size = fprintf(g_file->output, "%s [%s] [T%ld] %s\n", timestamp, level_to_string(level), tid, message);
-        g_file->currentFileSize += size;
-        fflush(g_file->output);
+    if (hasFlag(logger_type,FILELOGGER)) {
+        if (rotateFiles()) {
+            long size = fprintf(g_file->output, "%s [%s] [T%ld] %s\n", timestamp, level_to_string(level), tid, message);
+            g_file->currentFileSize += size;
+            fflush(g_file->output);
+        } 
     }
-  if(logger_type & NETWORKLOGGER && g_network){
+    if(hasFlag(logger_type,NETWORKLOGGER)){
     g_network->len += snprintf(g_network->buf + g_network->len,sizeof(g_network->buf) - g_network->len,
                                "%s [%s] [T%ld] %s\n",timestamp,level_to_string(level),tid,message);
     network_log(g_network,g_network->buf);
