@@ -41,6 +41,8 @@ typedef struct FileLog {
     long currentFileSize;
     log_level_t level;
     int maxBackUpFiles;
+    int archiveOldLogs;
+    char archiveDir[MAX_FILE_NAME];
 } FileLog;
 
 typedef struct ConsoleLog {
