@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <dirent.h>
 
 
 static log_level_t current_log_level = INFO;
@@ -153,7 +154,7 @@ static int is_FileExists(const char* filename){
   }
 
 }
-void getBackUpFileName(const char* baseName,int index,char* out,size_t outSize){
+static void getBackUpFileName(const char* baseName,int index,char* out,size_t outSize){
   if(index <= 0){
     snprintf(out,outSize,"%s",baseName);
   }else {
@@ -161,11 +162,51 @@ void getBackUpFileName(const char* baseName,int index,char* out,size_t outSize){
   }
 }
 
-int rotateFiles(){
-  int i; 
+static void archiveFile(const char* src, const char* archiveDir) {
+    char dst[512];
+    snprintf(dst, sizeof(dst), "%s/%s", archiveDir, src);
+    if (rename(src, dst) != 0) {
+        perror("Failed to archive file");
+    }
+}
 
-  char src[MAX_FILE_NAME + 5];
-  char dst[MAX_FILE_NAME + 5];
+static void moveToArchieve(){
+  
+  int i;
+
+  char dst[512],src[512]; 
+ 
+    for(i = (int)g_file->maxBackUpFiles;i > 0;i--){
+      getBackUpFileName(g_file->fileName,i - 1,src,sizeof(src));
+      getBackUpFileName(g_file->fileName,i,dst,sizeof(dst));
+
+      if(i == g_file->maxBackUpFiles - 1 && is_FileExists(dst)){
+        archiveFile(dst,g_file->archiveDir);
+      }else{
+        if(is_FileExists(dst)) remove(dst);
+      }
+
+      if(is_FileExists(src)) rename(src,dst);
+
+    }
+}
+
+static void deleteOldLogs() {
+
+    int i;
+
+    char src[512], dst[512];
+
+    for (i = (int)g_file->maxBackUpFiles - 1; i > 0; i--) {
+        getBackUpFileName(g_file->fileName, i - 1, src, sizeof(src));
+        getBackUpFileName(g_file->fileName, i, dst, sizeof(dst));
+
+        if (is_FileExists(dst)) remove(dst);
+        if (is_FileExists(src)) rename(src, dst);
+    }
+}
+
+static int rotateFiles(){
 
   if(g_file->currentFileSize < g_file->maxFileSize){
     return g_file->output != NULL;
@@ -173,20 +214,12 @@ int rotateFiles(){
 
   fclose(g_file->output);
 
-  for(i = (int)g_file->maxBackUpFiles;i > 0;i--){
-    getBackUpFileName(g_file->fileName,i - 1,src,sizeof(src));
-    getBackUpFileName(g_file->fileName,i,dst,sizeof(dst));
-    if(is_FileExists(dst)){
-      if(remove(dst) != 0){
-        fprintf(stderr,"ERROR: Failed to remove file: %s\n",dst);
-      }
-    }
-    if(is_FileExists(src)){
-      if(rename(src,dst) != 0){
-        fprintf(stderr,"ERROR: Failed to rename file: %s -> %s\n",src,dst);
-      }
-    }
+  if(g_file->archiveOldLogs == 0){
+    deleteOldLogs();
+  }else{
+    moveToArchieve();
   }
+
 
   g_file->output = fopen(g_file->fileName,"a");
   if(g_file->output == NULL){
