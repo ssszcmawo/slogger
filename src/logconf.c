@@ -1,7 +1,10 @@
+#define _GNU_SOURCE
 #include "slogger.h"
+#include "logconf.h"
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <string.h>
 
 static struct {
     FILE* output;
@@ -9,6 +12,8 @@ static struct {
     long maxFileSize;
     long currentFileSize;
     log_level_t level;
+    int archiveOldLogs;
+    char archiveDir[MAX_FILE_NAME];
 } file_log_conf;
 
 static struct {
@@ -30,7 +35,6 @@ static volatile int logger_initialized = 0;
 static char* port = NULL;
 static char* host = NULL;
 
-void parseLine(char* line);
 static log_level_t parseLogLevel(const char* s);
 static int hasFlag(int flags,int flag);
 static void set_log_level_conf(log_level_t* level,log_level_t new_level);
@@ -76,7 +80,7 @@ int configure_logger(const char* filename){
   }
 
   if(hasFlag(logger_initialized,FILELOGGER)){
-    if(init_fileLog(file_log_conf.fileName,file_log_conf.maxFileSize)){
+    if(init_fileLog(file_log_conf.fileName,file_log_conf.maxFileSize,file_log_conf.archiveOldLogs)){
       return 0;
     }
   }
@@ -131,6 +135,8 @@ void parseLine(char* line){
     }
   }else if(strcmp(key,"logger.file.output") == 0){
     strncpy(file_log_conf.fileName,val,sizeof(file_log_conf.fileName));
+  }else if(strcmp(key,"logger.file.archiveOldLogs")){
+    file_log_conf.archiveOldLogs = atoi(val);
   }else if(strcmp(key,"logger.file.maxFileSize") == 0){
     file_log_conf.maxFileSize = atol(val);
   }else if(strcmp(key,"logger.file.level") == 0){
