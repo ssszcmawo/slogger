@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include <dirent.h>
 
@@ -102,7 +103,7 @@ ConsoleLog* init_consoleLog(FILE* output) {
     return cl;
 }
 
-FileLog* init_fileLog(const char* filename, long maxFileSize) {
+FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot) {
     ensure_init();
 
     lock();
@@ -133,6 +134,21 @@ FileLog* init_fileLog(const char* filename, long maxFileSize) {
     logger_type |= FILELOGGER;
 
     fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
+    fl->archiveOldLogs = archiveOrNot;
+    
+    if(archiveOrNot == 1){
+
+      const char dir[24] = "archiveLogsDir";
+
+      if(mkdir(dir,0755) != 0){
+
+        fprintf(stderr,"ERROR: Failed to create directory: %s\n",dir);
+
+      }
+
+      strncpy(fl->archiveDir,dir,MAX_FILE_NAME);
+
+  }
 
     unlock();
 
@@ -385,11 +401,23 @@ void free_console_log(ConsoleLog* cl) {
 void free_file_log(FileLog* fl) {
     if (!fl) return;
 
-    if (fl->output) fclose(fl->output);
+    if (fl->output) fclose(fl->output); 
 
     free(fl);
 
     g_file = NULL;
+}
+
+void free_archive_logs(FileLog* fl){
+
+  if(rmdir(fl->archiveDir) != 0){
+
+      fprintf(stderr,"ERROR: Could not delete directory: %s\n",fl->archiveDir);
+
+      return;
+
+  }
+
 }
 
 static const char* level_to_color(log_level_t lvl) {
