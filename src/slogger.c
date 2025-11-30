@@ -130,7 +130,6 @@ FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot) {
     fseek(fl->output, 0, SEEK_END);
     fl->currentFileSize = ftell(fl->output);
 
-    g_file = fl;
     logger_type |= FILELOGGER;
 
     fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
@@ -149,6 +148,8 @@ FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot) {
       strncpy(fl->archiveDir,dir,MAX_FILE_NAME);
 
   }
+ 
+    g_file = fl;
 
     unlock();
 
@@ -420,6 +421,16 @@ void free_archive_logs(FileLog* fl){
 
 }
 
+static void compress_old_logs(const char* dir){
+
+  char cmd[512];
+
+  snprintf(cmd,sizeof(cmd),"zip -r old_logs.zip %s > /dev/null 2>&1",dir);
+
+  system(cmd);
+
+}
+
 static const char* level_to_color(log_level_t lvl) {
     switch (lvl) {
         case DEBUG:   return COLOR_BLUE;
@@ -470,7 +481,10 @@ void clear_log_file(const char* filename) {
 void close_logging(void) {
     lock();
     if (g_console) free_console_log(g_console);
-    if (g_file) free_file_log(g_file);
+    if (hasFlag(logger_type,FILELOGGER)){
+    compress_old_logs(g_file->archiveDir);
+    free_file_log(g_file);
+  } 
     if(g_network) free_network_log(g_network);
     unlock();
 }
