@@ -64,7 +64,8 @@ log_level_t get_log_level(void);
 ConsoleLog* init_consoleLog(FILE* output);
 void free_console_log(ConsoleLog* cl);
 
-FileLog* init_fileLog(const char* filename, long maxFileSize);
+FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot);
+int rotateFiles();
 void free_file_log(FileLog* fl);
 
 NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level);
