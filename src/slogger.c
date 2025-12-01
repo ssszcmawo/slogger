@@ -13,16 +13,29 @@
 #include <sys/stat.h>
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <pthread.h>
 
+
+static pthread_mutex_t l_mutex;
+static pthread_once_t  logger_once = PTHREAD_ONCE_INIT;
 
 static log_level_t current_log_level = INFO;
-static pthread_mutex_t l_mutex;
 static volatile int logger_initialized = 0;
 static volatile int logger_type;
 
 static ConsoleLog* g_console = NULL;
-static FileLog* g_file = NULL;
+static FileLog*    g_file = NULL;
 static NetworkLog* g_network = NULL;
+
+static void logger_real_init(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE); 
+    pthread_mutex_init(&l_mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
 
 static void lock(void) {
     pthread_mutex_lock(&l_mutex);
@@ -37,8 +50,7 @@ static long getCurrentThreadID(void) {
 }
 
 static void ensure_init(void) {
-    if (logger_initialized) return;
-    pthread_mutex_init(&l_mutex, NULL);
+    pthread_once(&logger_once,logger_real_init);
     logger_initialized = 1;
 }
 
@@ -91,7 +103,17 @@ ConsoleLog* init_consoleLog(FILE* output) {
 
     lock();
 
+    if(g_console){
+      unlock();
+      return g_console;
+  }
+
     ConsoleLog* cl = calloc(1, sizeof(ConsoleLog));
+
+    if(!cl){
+      unlock();
+      return NULL;
+  }
 
     cl->output = (output ? output : stdout);
 
@@ -103,17 +125,22 @@ ConsoleLog* init_consoleLog(FILE* output) {
     return cl;
 }
 
-FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot) {
+FileLog* init_fileLog(const char* filename, long maxFileSize,bool archiveOrNot) {
     ensure_init();
 
     lock();
 
+    if(g_file){
+    unlock();
+    return g_file;
+  }
+
     FileLog* fl = calloc(1, sizeof(FileLog));
 
-  if(!fl){
-    unlock();
-    return NULL;
-  }
+    if(!fl){
+      unlock();
+      return NULL;
+    }
 
     strncpy(fl->fileName, filename, MAX_FILE_NAME - 1);
     fl->fileName[MAX_FILE_NAME - 1] = '\0';
@@ -135,7 +162,7 @@ FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot) {
     fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
     fl->archiveOldLogs = archiveOrNot;
     
-    if(archiveOrNot == 1){
+   /* if(archiveOrNot == 1){
 
       const char dir[24] = "archiveLogsDir";
 
@@ -147,7 +174,7 @@ FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot) {
 
       strncpy(fl->archiveDir,dir,MAX_FILE_NAME);
 
-  }
+  }*/
  
     g_file = fl;
 
@@ -180,7 +207,7 @@ static void getBackUpFileName(const char* baseName,int index,char* out,size_t ou
 }
 
 static void archiveFile(const char* src, const char* archiveDir) {
-    char dst[512];
+    char dst[PATH_MAX];
     snprintf(dst, sizeof(dst), "%s/%s", archiveDir, src);
     if (rename(src, dst) != 0) {
         perror("Failed to archive file");
@@ -191,7 +218,7 @@ static void moveToArchieve(){
   
   int i;
 
-  char dst[512],src[512]; 
+  char dst[PATH_MAX],src[PATH_MAX]; 
  
     for(i = (int)g_file->maxBackUpFiles;i > 0;i--){
       getBackUpFileName(g_file->fileName,i - 1,src,sizeof(src));
@@ -208,47 +235,42 @@ static void moveToArchieve(){
     }
 }
 
-static void deleteOldLogs() {
+static void deleteOldLogs(void) {
+    char old[PATH_MAX], newer[PATH_MAX];
+    for (int i = g_file->maxBackUpFiles; i > 0; --i) {
+        getBackUpFileName(g_file->fileName, i, old, sizeof(old));
+        if (i == 1)
+            snprintf(newer, sizeof(newer), "%s", g_file->fileName);
+        else
+            getBackUpFileName(g_file->fileName, i-1, newer, sizeof(newer));
 
-    int i;
-
-    char src[512], dst[512];
-
-    for (i = (int)g_file->maxBackUpFiles - 1; i > 0; i--) {
-        getBackUpFileName(g_file->fileName, i - 1, src, sizeof(src));
-        getBackUpFileName(g_file->fileName, i, dst, sizeof(dst));
-
-        if (is_FileExists(dst)) remove(dst);
-        if (is_FileExists(src)) rename(src, dst);
+        if (is_FileExists(old))
+            remove(old);
+        if (is_FileExists(newer))
+            rename(newer, old);
     }
 }
 
-static int rotateFiles(){
+int rotateFiles(void) {
+    if (!g_file || g_file->currentFileSize < g_file->maxFileSize)
+        return 1;
 
-  if(g_file->currentFileSize < g_file->maxFileSize){
-    return g_file->output != NULL;
-  }
+    fclose(g_file->output);
+    g_file->output = NULL;
 
-  fclose(g_file->output);
+    if (g_file->archiveOldLogs) {
+        moveToArchieve();
+    } else {
+        deleteOldLogs();
+    }
 
-  if(g_file->archiveOldLogs == 0){
-    deleteOldLogs();
-  }else{
-    moveToArchieve();
-  }
-
-
-  g_file->output = fopen(g_file->fileName,"a");
-  if(g_file->output == NULL){
-    fprintf(stderr,"ERROR: Failed to open file: %s\n",g_file->fileName);
-    return 0;
-  }
-
-    fseek(g_file->output, 0, SEEK_END);
-    g_file->currentFileSize = ftell(g_file->output);
-
+    g_file->output = fopen(g_file->fileName, "a");
+    if (!g_file->output) {
+        fprintf(stderr, "ERROR: Cannot reopen log file %s\n", g_file->fileName);
+        return 0;
+    }
+    g_file->currentFileSize = 0;
     return 1;
-
 }
 
 NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level){
@@ -423,7 +445,7 @@ void free_archive_logs(FileLog* fl){
 
 static void compress_old_logs(const char* dir){
 
-  char cmd[512];
+  char cmd[PATH_MAX];
 
   snprintf(cmd,sizeof(cmd),"zip -r old_logs.zip %s > /dev/null 2>&1",dir);
 
@@ -457,11 +479,14 @@ void log_message(log_level_t level, const char* message) {
     }
 
     if (hasFlag(logger_type,FILELOGGER)) {
+        lock();
         if (rotateFiles()) {
             long size = fprintf(g_file->output, "%s [%s] [T%ld] %s\n", timestamp, level_to_string(level), tid, message);
-            g_file->currentFileSize += size;
+            if(size > 0)
+              g_file->currentFileSize += size;
             fflush(g_file->output);
         } 
+        unlock();
     }
     if(hasFlag(logger_type,NETWORKLOGGER)){
     g_network->len += snprintf(g_network->buf + g_network->len,sizeof(g_network->buf) - g_network->len,
@@ -479,14 +504,35 @@ void clear_log_file(const char* filename) {
 }
 
 void close_logging(void) {
-    lock();
-    if (g_console) free_console_log(g_console);
-    if (hasFlag(logger_type,FILELOGGER)){
-    compress_old_logs(g_file->archiveDir);
+
+  lock();
+
+  if(g_console){
+
+    free_console_log(g_console);
+    g_console = NULL;
+
+  }
+
+  if(g_file){
+
+    if(g_file->archiveOldLogs && g_file->archiveDir[0])
+      compress_old_logs(g_file->archiveDir);
     free_file_log(g_file);
-  } 
-    if(g_network) free_network_log(g_network);
-    unlock();
+    g_file = NULL;
+
+  }
+
+  if(g_network){
+
+    free_network_log(g_network);
+    g_network = NULL;
+
+  }
+
+  logger_type = 0;
+  unlock();
+
 }
 
 
