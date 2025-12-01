@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <netinet/in.h>
+#include <stdbool.h>
 
 #define MAX_FILE_NAME 64
 #define DEFAULT_MAX_FILE_SIZE 1048576L
@@ -64,7 +65,7 @@ log_level_t get_log_level(void);
 ConsoleLog* init_consoleLog(FILE* output);
 void free_console_log(ConsoleLog* cl);
 
-FileLog* init_fileLog(const char* filename, long maxFileSize,int archiveOrNot);
+FileLog* init_fileLog(const char* filename, long maxFileSize,bool archiveOrNot);
 int rotateFiles();
 void free_file_log(FileLog* fl);
 
