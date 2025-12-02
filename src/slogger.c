@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "slogger.h"
+#include "zip.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -125,80 +126,71 @@ ConsoleLog* init_consoleLog(FILE* output) {
     return cl;
 }
 
-FileLog* init_fileLog(const char* filename, long maxFileSize,bool archiveOrNot) {
+FileLog* init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot){
     ensure_init();
-
     lock();
-
-    if(g_file){
-    unlock();
-    return g_file;
-  }
+    if (g_file) {
+        unlock();
+        return g_file;
+    }
 
     FileLog* fl = calloc(1, sizeof(FileLog));
-
-    if(!fl){
-      unlock();
-      return NULL;
+    if (!fl) {
+        unlock();
+        return NULL;
     }
 
     strncpy(fl->fileName, filename, MAX_FILE_NAME - 1);
     fl->fileName[MAX_FILE_NAME - 1] = '\0';
-
     fl->maxFileSize = (maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE);
+    fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
+    fl->archiveOldLogs = archiveOrNot;
+
+    if (archiveOrNot) {
+
+        char tmp[MAX_FILE_NAME];
+
+        strncpy(tmp, filename, sizeof(tmp)-1);
+
+        char* slash = strrchr(tmp, '/');
+
+        if (slash) memmove(tmp, slash + 1, strlen(slash + 1) + 1);
+        char* dot = strrchr(tmp, '.');
+        if (dot) *dot = '\0';
+
+        snprintf(fl->archiveDir, sizeof(fl->archiveDir), "archive_%s", tmp);
+        mkdir(fl->archiveDir, 0755);
+    } else {
+
+        fl->archiveDir[0] = '\0';
+
+    }
+
     fl->output = fopen(filename, "a");
-    if(fl->output == NULL){
-      fprintf(stderr,"ERROR: Failed to open file: %s\n",filename);
-      free(fl);
-      unlock();
-      return NULL;
-  }
+    if (!fl->output) {
+
+        fprintf(stderr, "ERROR: Failed to open file: %s\n", filename);
+        free(fl);
+        unlock();
+        return NULL;
+
+    }
 
     fseek(fl->output, 0, SEEK_END);
     fl->currentFileSize = ftell(fl->output);
-
     logger_type |= FILELOGGER;
-
-    fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
-    fl->archiveOldLogs = archiveOrNot;
-    
-   /* if(archiveOrNot == 1){
-
-      const char dir[24] = "archiveLogsDir";
-
-      if(mkdir(dir,0755) != 0){
-
-        fprintf(stderr,"ERROR: Failed to create directory: %s\n",dir);
-
-      }
-
-      strncpy(fl->archiveDir,dir,MAX_FILE_NAME);
-
-  }*/
- 
     g_file = fl;
-
     unlock();
-
     return fl;
-}
-
-static int is_FileExists(const char* filename){
-
-  FILE* fp;
-
-  if((fp = fopen(filename,"r")) == NULL){
-
-    return 0;
-
-  }else{
-    fclose(fp);
-    return 1;
-
-  }
 
 }
-static void getBackUpFileName(const char* baseName,int index,char* out,size_t outSize){
+
+static int file_exists(const char* path) {
+    struct stat st;
+    return (stat(path, &st) == 0);
+}
+
+static void backup_filename(const char* baseName,int index,char* out,size_t outSize){
   if(index <= 0){
     snprintf(out,outSize,"%s",baseName);
   }else {
@@ -206,69 +198,52 @@ static void getBackUpFileName(const char* baseName,int index,char* out,size_t ou
   }
 }
 
-static void archiveFile(const char* src, const char* archiveDir) {
-    char dst[PATH_MAX];
-    snprintf(dst, sizeof(dst), "%s/%s", archiveDir, src);
-    if (rename(src, dst) != 0) {
-        perror("Failed to archive file");
+static void rotate_backup_files(const char* baseName, int maxBackups, const char* archiveDir)
+{
+    char oldPath[PATH_MAX];
+    char newPath[PATH_MAX];
+
+    if (maxBackups > 0) {
+        backup_filename(baseName, maxBackups, oldPath, sizeof(oldPath));
+        if (file_exists(oldPath)) {
+            if (archiveDir && archiveDir[0]) {
+                char archived[PATH_MAX];
+                snprintf(archived, sizeof(archived), "%s/%s.%d", archiveDir, baseName, maxBackups);
+                rename(oldPath, archived);
+            } else {
+                unlink(oldPath);
+            }
+        }
+    }
+
+    for (int i = maxBackups; i >= 1; --i) {
+        backup_filename(baseName, i - 1, oldPath, sizeof(oldPath));
+        backup_filename(baseName, i,     newPath, sizeof(newPath));
+        if (file_exists(oldPath)) {
+            rename(oldPath, newPath);
+        }
     }
 }
 
-static void moveToArchieve(){
-  
-  int i;
-
-  char dst[PATH_MAX],src[PATH_MAX]; 
- 
-    for(i = (int)g_file->maxBackUpFiles;i > 0;i--){
-      getBackUpFileName(g_file->fileName,i - 1,src,sizeof(src));
-      getBackUpFileName(g_file->fileName,i,dst,sizeof(dst));
-
-      if(i == g_file->maxBackUpFiles - 1 && is_FileExists(dst)){
-        archiveFile(dst,g_file->archiveDir);
-      }else{
-        if(is_FileExists(dst)) remove(dst);
-      }
-
-      if(is_FileExists(src)) rename(src,dst);
-
-    }
-}
-
-static void deleteOldLogs(void) {
-    char old[PATH_MAX], newer[PATH_MAX];
-    for (int i = g_file->maxBackUpFiles; i > 0; --i) {
-        getBackUpFileName(g_file->fileName, i, old, sizeof(old));
-        if (i == 1)
-            snprintf(newer, sizeof(newer), "%s", g_file->fileName);
-        else
-            getBackUpFileName(g_file->fileName, i-1, newer, sizeof(newer));
-
-        if (is_FileExists(old))
-            remove(old);
-        if (is_FileExists(newer))
-            rename(newer, old);
-    }
-}
-
-int rotateFiles(void) {
+int rotateFiles(void)
+{
     if (!g_file || g_file->currentFileSize < g_file->maxFileSize)
         return 1;
 
     fclose(g_file->output);
     g_file->output = NULL;
 
-    if (g_file->archiveOldLogs) {
-        moveToArchieve();
-    } else {
-        deleteOldLogs();
-    }
+    const char* archive_dir = (g_file->archiveOldLogs && g_file->archiveDir[0])
+                              ? g_file->archiveDir : NULL;
 
-    g_file->output = fopen(g_file->fileName, "a");
+    rotate_backup_files(g_file->fileName, g_file->maxBackUpFiles, archive_dir);
+
+    g_file->output = fopen(g_file->fileName, "w");
     if (!g_file->output) {
         fprintf(stderr, "ERROR: Cannot reopen log file %s\n", g_file->fileName);
         return 0;
     }
+
     g_file->currentFileSize = 0;
     return 1;
 }
@@ -443,16 +418,6 @@ void free_archive_logs(FileLog* fl){
 
 }
 
-static void compress_old_logs(const char* dir){
-
-  char cmd[PATH_MAX];
-
-  snprintf(cmd,sizeof(cmd),"zip -r old_logs.zip %s > /dev/null 2>&1",dir);
-
-  system(cmd);
-
-}
-
 static const char* level_to_color(log_level_t lvl) {
     switch (lvl) {
         case DEBUG:   return COLOR_BLUE;
@@ -478,15 +443,13 @@ void log_message(log_level_t level, const char* message) {
         fflush(g_console->output);
     }
 
-    if (hasFlag(logger_type,FILELOGGER)) {
-        lock();
+    if (hasFlag(logger_type,FILELOGGER)){
         if (rotateFiles()) {
             long size = fprintf(g_file->output, "%s [%s] [T%ld] %s\n", timestamp, level_to_string(level), tid, message);
             if(size > 0)
               g_file->currentFileSize += size;
             fflush(g_file->output);
         } 
-        unlock();
     }
     if(hasFlag(logger_type,NETWORKLOGGER)){
     g_network->len += snprintf(g_network->buf + g_network->len,sizeof(g_network->buf) - g_network->len,
@@ -514,14 +477,42 @@ void close_logging(void) {
 
   }
 
-  if(g_file){
+  if (g_file->archiveOldLogs && g_file->archiveDir[0]) {
 
-    if(g_file->archiveOldLogs && g_file->archiveDir[0])
-      compress_old_logs(g_file->archiveDir);
-    free_file_log(g_file);
-    g_file = NULL;
+    char zip_path[PATH_MAX];
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char basename[128];
+    const char *slash = strrchr(g_file->fileName, '/');
+    const char *name = slash ? slash + 1 : g_file->fileName;
+    char *dot = strrchr(name, '.');
+    if (dot) {
 
-  }
+        size_t len = dot - name;
+        strncpy(basename, name, len);
+        basename[len] = '\0';
+
+    } else {
+
+        strncpy(basename, name, sizeof(basename)-1);
+        basename[sizeof(basename)-1] = '\0';
+
+    }
+
+    snprintf(zip_path, sizeof(zip_path),
+             "%s_archive_%04d%02d%02d_%02d%02d%02d.zip",
+             basename,
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+    create_zip(g_file->archiveDir, zip_path);
+
+  
+    char cmd[PATH_MAX + 20];
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", g_file->archiveDir);
+    system(cmd);
+    g_file->archiveDir[0] = '\0'; 
+}
 
   if(g_network){
 
