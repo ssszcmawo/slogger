@@ -6,6 +6,8 @@
 #include <assert.h>
 #include <string.h>
 
+
+
 static struct {
     FILE* output;
     char fileName[MAX_FILE_NAME];
@@ -21,19 +23,8 @@ static struct {
     log_level_t level;
 }console_log_conf;
 
-static struct {
-  int sockfd;
-  struct addrinfo* addr;
-  char buf[MAX_BUF_SIZE];
-  size_t len;
-  log_level_t level;
-}network_log_conf;
-
 
 static volatile int logger_initialized = 0;
-
-static char* port = NULL;
-static char* host = NULL;
 
 static log_level_t parseLogLevel(const char* s);
 static int hasFlag(int flags,int flag);
@@ -43,7 +34,7 @@ static void set_log_level_conf(log_level_t* level,log_level_t new_level);
 int configure_logger(const char* filename){
 
   FILE* fp;
-  char line[maxLineLen];
+  char line[MAX_LINE_LEN];
 
   if(filename == NULL){
     assert(0 && "filename must not be NULL");
@@ -58,7 +49,6 @@ int configure_logger(const char* filename){
 
     memset(&file_log_conf, 0, sizeof(file_log_conf));
     memset(&console_log_conf, 0, sizeof(console_log_conf));
-    memset(&network_log_conf, 0, sizeof(network_log_conf));
 
 
   while(fgets(line,sizeof(line),fp) != NULL){
@@ -84,13 +74,6 @@ int configure_logger(const char* filename){
       return 0;
     }
   }
-
-  if(hasFlag(logger_initialized,NETWORKLOGGER)){
-    if(init_networkLog(host,port,network_log_conf.level)){
-      return 0;
-    }
-  }
-
 
   if(logger_initialized == 0){
     return 0;
@@ -119,8 +102,6 @@ void parseLine(char* line){
       logger_initialized |= CONSOLELOGGER;
     }else if(strcmp(val,"file") == 0){
       logger_initialized |= FILELOGGER;
-    }else if(strcmp(val,"network") == 0){
-      logger_initialized |= NETWORKLOGGER;
     }else{
       fprintf(stderr,"ERROR:Invalid type of logger: %s\n",val);
     }
@@ -143,15 +124,8 @@ void parseLine(char* line){
     set_log_level_conf(&(file_log_conf.level),parseLogLevel(val));
   }else if(strcmp(key,"logger.console.level") == 0){
     set_log_level_conf(&(console_log_conf.level),parseLogLevel(val));
-  }else if(strcmp(key,"PORT") == 0){
-    if(port) free(port);
-    port = strdup(val);
-  }else if(strcmp(key,"HOST") == 0){
-    if(host) free(host);
-    host = strdup(val);
   }
 }
-
 static log_level_t parseLogLevel(const char* s){
   if(strcmp(s,"INFO") == 0){
     return INFO;
