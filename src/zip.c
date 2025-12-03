@@ -229,23 +229,45 @@ static void write_eocd(void)
     fwrite(&eocd, sizeof(eocd), 1, zip_fp);
 }
 
-void create_zip(const char *folder, const char *zipname)
+int create_zip(const char *folder, const char *zipname)
 {
+    if (!folder || !zipname || folder[0] == '\0' || zipname[0] == '\0')
+        return -1;
+
     zip_fp = fopen(zipname, "wb");
-    if (!zip_fp) return;
+    if (!zip_fp)
+        return -1;
 
     cd_offset = 0;
-    cd_size   = 0;
+    cd_size = 0;
     entry_count = 0;
 
     walk_dir(folder, folder);
 
+    if (entry_count == 0) {
+        fclose(zip_fp);
+        zip_fp = NULL;
+        unlink(zipname);  
+        return -1;
+    }
+
     cd_offset = ftell(zip_fp);
+
     fseek(zip_fp, 0, SEEK_SET);
-    walk_dir(folder, folder);           /* second pass - write central directory */
-    fseek(zip_fp, cd_offset, SEEK_SET);
+    walk_dir(folder, folder);
+
+    fseek(zip_fp, 0, SEEK_END);
     write_eocd();
 
     fclose(zip_fp);
     zip_fp = NULL;
+
+
+    struct stat st;
+    if (stat(zipname, &st) != 0 || st.st_size < 22) { 
+        unlink(zipname);
+        return -1;
+    }
+
+    return 0; 
 }
