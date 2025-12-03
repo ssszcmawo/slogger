@@ -17,414 +17,254 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <ftw.h>
 
+#define TIMESTAMP_BUF_SIZE 32
+#define LOG_BUFFER_SIZE 8192
 
-static pthread_mutex_t l_mutex;
-static pthread_once_t  logger_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t l_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t logger_once = PTHREAD_ONCE_INIT;
 
 static log_level_t current_log_level = INFO;
-static volatile int logger_initialized = 0;
-static volatile int logger_type;
+static int logger_type;
+static int logger_initialized;
 
 static ConsoleLog* g_console = NULL;
 static FileLog*    g_file = NULL;
-static NetworkLog* g_network = NULL;
 
-static void logger_real_init(void) {
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE); 
-    pthread_mutex_init(&l_mutex, &attr);
-    pthread_mutexattr_destroy(&attr);
-}
+
 
 static void lock(void) {
-    pthread_mutex_lock(&l_mutex);
+  pthread_mutex_lock(&l_mutex);
 }
 
 static void unlock(void) {
-    pthread_mutex_unlock(&l_mutex);
+  pthread_mutex_unlock(&l_mutex);
 }
 
 static long getCurrentThreadID(void) {
-    return (long)syscall(SYS_gettid);
+  return (long)syscall(SYS_gettid);
 }
 
-static void ensure_init(void) {
-    pthread_once(&logger_once,logger_real_init);
+static void logger_init(void) {
     logger_initialized = 1;
 }
 
-static int hasFlag(int flags, int flag)
-{
-    return (flags & flag) == flag;
+static void ensure_init(void) {
+    pthread_once(&logger_once, logger_init);
 }
 
-static void *get_in_addr(struct sockaddr* sa){
-  if(sa->sa_family == AF_INET){
-    return&(((struct sockaddr_in*)sa)->sin_addr);
-  }
-  return &(((struct sockaddr_in6*)sa)->sin6_addr);
+static int hasFlag(int flags, int flag) {
+
+    return (flags & flag) != 0;
+
 }
 
 static void format_timestamp(char* buf, size_t size) {
-    struct timeval tv;
+  struct timeval tv;
 
-    gettimeofday(&tv, NULL);
+  gettimeofday(&tv, NULL);
 
-    struct tm tm;
+  struct tm tm;
 
-    localtime_r(&tv.tv_sec, &tm);
+  localtime_r(&tv.tv_sec, &tm);
 
-    strftime(buf, size, "%Y-%m-%d %H:%M:%S", &tm);
+  strftime(buf, size, "%Y-%m-%d %H:%M:%S", &tm);
 
-    size_t len = strlen(buf);
-    snprintf(buf + len, (len < size) ? size - len : 0, ".%06ld", (long)tv.tv_usec);
+  size_t len = strlen(buf);
+  snprintf(buf + len, (len < size) ? size - len : 0, ".%06ld", (long)tv.tv_usec);
 }
 
 static const char* level_to_string(log_level_t lvl) {
-    switch (lvl) {
-        case DEBUG: return "DEBUG";
-        case WARNING: return "WARN";
-        case ERROR: return "ERROR";
-        default: return "INFO";
-    }
+  switch (lvl) {
+    case DEBUG: return "DEBUG";
+    case WARNING: return "WARN";
+    case ERROR: return "ERROR";
+    default: return "INFO";
+  }
 }
 
 void set_log_level(log_level_t level) {
-    current_log_level = level;
+  current_log_level = level;
 }
 
 log_level_t get_log_level(void) {
-    return current_log_level;
+  return current_log_level;
 }
 
 ConsoleLog* init_consoleLog(FILE* output) {
-    ensure_init();
-
-    lock();
-
-    if(g_console){
-      unlock();
-      return g_console;
-  }
-
-    ConsoleLog* cl = calloc(1, sizeof(ConsoleLog));
-
-    if(!cl){
-      unlock();
-      return NULL;
-  }
-
-    cl->output = (output ? output : stdout);
-
-    g_console = cl;
-    logger_type |= CONSOLELOGGER;
-
-    unlock();
-
-    return cl;
-}
-
-FileLog* init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot){
-    ensure_init();
-    lock();
-    if (g_file) {
-        unlock();
-        return g_file;
-    }
-
-    FileLog* fl = calloc(1, sizeof(FileLog));
-    if (!fl) {
-        unlock();
-        return NULL;
-    }
-
-    strncpy(fl->fileName, filename, MAX_FILE_NAME - 1);
-    fl->fileName[MAX_FILE_NAME - 1] = '\0';
-    fl->maxFileSize = (maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE);
-    fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
-    fl->archiveOldLogs = archiveOrNot;
-
-    if (archiveOrNot) {
-
-        char tmp[MAX_FILE_NAME];
-
-        strncpy(tmp, filename, sizeof(tmp)-1);
-
-        char* slash = strrchr(tmp, '/');
-
-        if (slash) memmove(tmp, slash + 1, strlen(slash + 1) + 1);
-        char* dot = strrchr(tmp, '.');
-        if (dot) *dot = '\0';
-
-        snprintf(fl->archiveDir, sizeof(fl->archiveDir), "archive_%s", tmp);
-        mkdir(fl->archiveDir, 0755);
-    } else {
-
-        fl->archiveDir[0] = '\0';
-
-    }
-
-    fl->output = fopen(filename, "a");
-    if (!fl->output) {
-
-        fprintf(stderr, "ERROR: Failed to open file: %s\n", filename);
-        free(fl);
-        unlock();
-        return NULL;
-
-    }
-
-    fseek(fl->output, 0, SEEK_END);
-    fl->currentFileSize = ftell(fl->output);
-    logger_type |= FILELOGGER;
-    g_file = fl;
-    unlock();
-    return fl;
-
-}
-
-static int file_exists(const char* path) {
-    struct stat st;
-    return (stat(path, &st) == 0);
-}
-
-static void backup_filename(const char* baseName,int index,char* out,size_t outSize){
-  if(index <= 0){
-    snprintf(out,outSize,"%s",baseName);
-  }else {
-    snprintf(out,outSize,"%s.%d",baseName,index);
-  }
-}
-
-static void rotate_backup_files(const char* baseName, int maxBackups, const char* archiveDir)
-{
-    char oldPath[PATH_MAX];
-    char newPath[PATH_MAX];
-
-    if (maxBackups > 0) {
-        backup_filename(baseName, maxBackups, oldPath, sizeof(oldPath));
-        if (file_exists(oldPath)) {
-            if (archiveDir && archiveDir[0]) {
-                char archived[PATH_MAX];
-                snprintf(archived, sizeof(archived), "%s/%s.%d", archiveDir, baseName, maxBackups);
-                rename(oldPath, archived);
-            } else {
-                unlink(oldPath);
-            }
-        }
-    }
-
-    for (int i = maxBackups; i >= 1; --i) {
-        backup_filename(baseName, i - 1, oldPath, sizeof(oldPath));
-        backup_filename(baseName, i,     newPath, sizeof(newPath));
-        if (file_exists(oldPath)) {
-            rename(oldPath, newPath);
-        }
-    }
-}
-
-int rotateFiles(void)
-{
-    if (!g_file || g_file->currentFileSize < g_file->maxFileSize)
-        return 1;
-
-    fclose(g_file->output);
-    g_file->output = NULL;
-
-    const char* archive_dir = (g_file->archiveOldLogs && g_file->archiveDir[0])
-                              ? g_file->archiveDir : NULL;
-
-    rotate_backup_files(g_file->fileName, g_file->maxBackUpFiles, archive_dir);
-
-    g_file->output = fopen(g_file->fileName, "w");
-    if (!g_file->output) {
-        fprintf(stderr, "ERROR: Cannot reopen log file %s\n", g_file->fileName);
-        return 0;
-    }
-
-    g_file->currentFileSize = 0;
-    return 1;
-}
-
-NetworkLog* init_networkLog(const char* host,const char* port,log_level_t level){
   ensure_init();
 
   lock();
 
-  NetworkLog* nl = calloc(1,sizeof(NetworkLog));
-
-  int sockfd;
-  struct addrinfo hints,*servinfo;
-  int rv;
-
-  memset(&hints,0,sizeof(hints));
-
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-
-  if((rv = getaddrinfo(host,port,&hints,&servinfo)) != 0){
-    fprintf(stderr,"getaddinfo: %s\n",gai_strerror(rv));
-
-    free(nl);
-
+  if(g_console){
     unlock();
+    return g_console;
+  }
 
+  ConsoleLog* cl = calloc(1, sizeof(ConsoleLog));
+
+  if(!cl){
+    unlock();
     return NULL;
   }
 
+  cl->output = (output ? output : stdout);
 
-  struct addrinfo* p;
-
-  for(p = servinfo; p != NULL; p = p->ai_next){
-    if((sockfd = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1){
-      perror("socket");
-      continue;
-    }
-
-    if(connect(sockfd,p->ai_addr,p->ai_addrlen) == -1){
-      perror("connect");
-      close(sockfd);
-      sockfd = -1;
-      continue;
-    }
-
-    break;
-  }
-
-  if(sockfd == -1){
-    fprintf(stderr, "Failed to connect to %s:%s\n", host, port);
-
-    free(nl);
-    freeaddrinfo(servinfo);
-
-    unlock();
-
-    return NULL;
-  }
-
-  nl->sockfd = sockfd;
-  nl->addr = servinfo;
-  nl->level = level;
-  nl->len = 0;
-
-  g_network = nl;
-
-  logger_type |= NETWORKLOGGER;
+  g_console = cl;
+  logger_type |= CONSOLELOGGER;
 
   unlock();
 
-  return nl;
+  return cl;
 }
 
-int network_log(NetworkLog* nl,char* message){
-  if(!nl || !message) return -1;
 
-  size_t len = strlen(message);
-  ssize_t sent;
+FileLog* init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot) {
+  ensure_init();
+  lock();
+  if (g_file) { unlock(); return g_file; }
 
-retry_send:
-  sent = send(nl->sockfd,message,len,0);
-  if(sent == -1){
-    perror("send");
+  FileLog* fl = calloc(1, sizeof(FileLog));
+  if (!fl) { unlock(); return NULL; }
 
-    if(errno == ECONNRESET || errno == EPIPE){
-      close(nl->sockfd);
+  strncpy(fl->fileName, filename, sizeof(fl->fileName) - 1);
+  fl->fileName[sizeof(fl->fileName) - 1] = '\0';
+  fl->maxFileSize = maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE;
+  fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
+  fl->archiveOldLogs = archiveOrNot;
 
-      struct addrinfo* p;
-      int sockfd = -1;
-
-      for(p = nl->addr; p != NULL; p = p->ai_next){
-
-        sockfd = socket(p->ai_family,p->ai_socktype,p->ai_protocol);
-
-        if(sockfd == -1) continue;
-
-        if(connect(sockfd,p->ai_addr,p->ai_addrlen) == -1){
-          close(sockfd);
-          sockfd = -1;
-          continue;
-        }
-
-        break;
-
-      }
-
-      if(sockfd == -1){
-        fprintf(stderr, "network_log: failed to reconnect\n");
-        return -1;
-      }
-
-      nl->sockfd = sockfd;
-      goto retry_send;
+  if (archiveOrNot) {
+    snprintf(fl->archiveDir, sizeof(fl->archiveDir), "%s_archive", filename);
+    fl->archiveDir[sizeof(fl->archiveDir) - 1] = '\0';
+    if (mkdir(fl->archiveDir, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "ERROR: Cannot create archive directory %s\n", fl->archiveDir);
     }
-    return -1;
   }
 
-  if((size_t)sent < len){
-    message += sent;
-    len -= sent;
-    goto retry_send;
-  }
+  fl->output = fopen(filename, "a");
+  if (!fl->output) { free(fl); unlock(); return NULL; }
 
-  return 0;
+  fseek(fl->output, 0, SEEK_END);
+  fl->currentFileSize = ftell(fl->output);
+  g_file = fl;
+  logger_type |= FILELOGGER;
+  unlock();
+  return fl;
 }
 
-static void flush_buffer(NetworkLog* nl){
-  if(nl->len > 0){
-    send(nl->sockfd,nl->buf,nl->len,0);
-    nl->len = 0;
+static int file_exists(const char* path) {
+  struct stat st;
+  return (stat(path, &st) == 0);
+}
+
+static void backup_filename(const char* baseName,int index,char* out,size_t outSize){
+
+  if(index <= 0){
+
+    snprintf(out,outSize,"%s",baseName);
+
+  }else {
+
+    snprintf(out,outSize,"%s.%d",baseName,index);
+
+  }
+
+}
+
+static void rotate_backup_files(const char* baseName, int maxBackups, const char* archiveDir)
+{
+  char oldPath[PATH_MAX];
+  char newPath[PATH_MAX];
+
+  if (maxBackups > 0) {
+    backup_filename(baseName, maxBackups, oldPath, sizeof(oldPath));
+    if (file_exists(oldPath)) {
+      if (archiveDir && archiveDir[0]) {
+        char archived[PATH_MAX];
+        snprintf(archived, sizeof(archived), "%s/%s.%d", archiveDir, baseName, maxBackups);
+        if(rename(oldPath, archived) != 0){
+          fprintf(stderr,"ERROR: Cannot move file %s -> %s\n",oldPath,archived);
+        }
+      } else {
+        if(unlink(oldPath) != 0){
+          fprintf(stderr,"ERROR: Cannot remove file %s\n",oldPath);
+        }
+      }
+    }
+  }
+
+  for (int i = maxBackups; i >= 1; --i) {
+    backup_filename(baseName, i - 1, oldPath, sizeof(oldPath));
+    backup_filename(baseName, i,     newPath, sizeof(newPath));
+    if (file_exists(oldPath)) {
+      if(rename(oldPath, newPath) != 0){
+        fprintf(stderr,"ERROR: Cannot rotate files %s -> %s\n",oldPath,newPath);
+        
+      }
+    }
   }
 }
 
-void free_network_log(NetworkLog* nl){
-  if(!nl) return;
+int rotateFiles(void)
+{
+  if (!g_file || g_file->currentFileSize < g_file->maxFileSize)
+    return 1;
 
-  if(nl->addr) freeaddrinfo(nl->addr);
+  fclose(g_file->output);
+  g_file->output = NULL;
 
-  free(nl);
+  const char* archive_dir = (g_file->archiveOldLogs && g_file->archiveDir[0])
+    ? g_file->archiveDir : NULL;
 
-  g_network = NULL;
+  rotate_backup_files(g_file->fileName, g_file->maxBackUpFiles, archive_dir);
+
+  g_file->output = fopen(g_file->fileName, "w");
+  if (!g_file->output) {
+    fprintf(stderr, "ERROR: Cannot reopen log file %s\n", g_file->fileName);
+    return 0;
+  }
+
+  g_file->currentFileSize = 0;
+  return 1;
 }
 
 void free_console_log(ConsoleLog* cl) {
-    if (!cl) return;
+  if (!cl) return;
 
-    free(cl);
+  free(cl);
 
-    g_console = NULL;
+  g_console = NULL;
 }
 
 void free_file_log(FileLog* fl) {
-    if (!fl) return;
+  if (!fl) return;
 
-    if (fl->output) fclose(fl->output); 
+  if (fl->output) fclose(fl->output); 
 
-    free(fl);
+  free(fl);
 
-    g_file = NULL;
+  g_file = NULL;
 }
 
 void free_archive_logs(FileLog* fl){
 
   if(rmdir(fl->archiveDir) != 0){
 
-      fprintf(stderr,"ERROR: Could not delete directory: %s\n",fl->archiveDir);
+    fprintf(stderr,"ERROR: Could not delete directory: %s\n",fl->archiveDir);
 
-      return;
+    return;
 
   }
 
 }
-
 static const char* level_to_color(log_level_t lvl) {
-    switch (lvl) {
-        case DEBUG:   return COLOR_BLUE;
-        case WARNING: return COLOR_YELLOW;
-        case ERROR:   return COLOR_RED;
-        default:      return COLOR_GREEN;
-    }
+  switch (lvl) {
+    case DEBUG:   return COLOR_BLUE;
+    case WARNING: return COLOR_YELLOW;
+    case ERROR:   return COLOR_RED;
+    default:      return COLOR_GREEN;
+  }
 }
 
 void log_message(log_level_t level, const char* message) {
@@ -433,97 +273,118 @@ void log_message(log_level_t level, const char* message) {
     ensure_init();
     lock();
 
-    char timestamp[32];
+    char timestamp[TIMESTAMP_BUF_SIZE];
     format_timestamp(timestamp, sizeof(timestamp));
     long tid = getCurrentThreadID();
 
-    if (hasFlag(logger_type,CONSOLELOGGER)) {
+    if (hasFlag(logger_type, CONSOLELOGGER)) {
         const char* color = level_to_color(level);
-        fprintf(g_console->output, "%s%s [%s] [T%ld] %s%s\n",color, timestamp, level_to_string(level), tid, message,COLOR_RESET);
+        fprintf(g_console->output, "%s%s [%s] [T%ld] %s%s\n",
+                color, timestamp, level_to_string(level), tid, message, COLOR_RESET);
         fflush(g_console->output);
     }
 
-    if (hasFlag(logger_type,FILELOGGER)){
-        if (rotateFiles()) {
-            long size = fprintf(g_file->output, "%s [%s] [T%ld] %s\n", timestamp, level_to_string(level), tid, message);
-            if(size > 0)
-              g_file->currentFileSize += size;
-            fflush(g_file->output);
-        } 
+    if (hasFlag(logger_type, FILELOGGER) && g_file && g_file->output) {
+    long size = fprintf(g_file->output, "%s [%s] [T%ld] %s\n",
+                        timestamp, level_to_string(level), tid, message);
+    if (size > 0) {
+        g_file->currentFileSize += size;
+
+        if (g_file->currentFileSize >= g_file->maxFileSize) {
+            unlock();                    
+            if (!rotateFiles()) {
+                fprintf(stderr, "CRITICAL: Log rotation failed permanently. Disabling file logging.\n");
+                fclose(g_file->output);
+                g_file->output = NULL;
+            }
+            lock();                   
+        }
     }
-    if(hasFlag(logger_type,NETWORKLOGGER)){
-    g_network->len += snprintf(g_network->buf + g_network->len,sizeof(g_network->buf) - g_network->len,
-                               "%s [%s] [T%ld] %s\n",timestamp,level_to_string(level),tid,message);
-    network_log(g_network,g_network->buf);
-    flush_buffer(g_network); 
-  }
+    fflush(g_file->output);
+}
 
     unlock();
 }
 
-void clear_log_file(const char* filename) {
-    FILE* file = fopen(filename, "w");
-    if (file) fclose(file);
+void log_messagef(log_level_t level, const char* fmt, ...) {
+    if (level < current_log_level) return;
+    char buffer[LOG_BUFFER_SIZE];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    log_message(level, buffer);
 }
 
-void close_logging(void) {
+void clear_log_file(const char* filename) {
+  FILE* file = fopen(filename, "w");
+  if (file) fclose(file);
+}
 
-  lock();
+static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+    return remove(fpath);
+}
 
-  if(g_console){
+static int remove_directory_recursively(const char *path) {
+    return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
 
-    free_console_log(g_console);
-    g_console = NULL;
+void close_logging(void)
+{
+    lock();
 
-  }
-
-  if (g_file->archiveOldLogs && g_file->archiveDir[0]) {
-
-    char zip_path[PATH_MAX];
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char basename[128];
-    const char *slash = strrchr(g_file->fileName, '/');
-    const char *name = slash ? slash + 1 : g_file->fileName;
-    char *dot = strrchr(name, '.');
-    if (dot) {
-
-        size_t len = dot - name;
-        strncpy(basename, name, len);
-        basename[len] = '\0';
-
-    } else {
-
-        strncpy(basename, name, sizeof(basename)-1);
-        basename[sizeof(basename)-1] = '\0';
-
+    if (g_console) {
+        free_console_log(g_console);
+        g_console = NULL;
     }
 
-    snprintf(zip_path, sizeof(zip_path),
-             "%s_archive_%04d%02d%02d_%02d%02d%02d.zip",
-             basename,
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec);
+    if (g_file) {
+        if (g_file->archiveOldLogs && g_file->archiveDir[0]) {
+            char zip_path[PATH_MAX];
+            time_t t = time(NULL);
+            struct tm tm;
+            localtime_r(&t, &tm);
 
-    create_zip(g_file->archiveDir, zip_path);
+            const char *slash = strrchr(g_file->fileName, '/');
+            const char *name = slash ? slash + 1 : g_file->fileName;
+            char basename[128];
+            const char *dot = strrchr(name, '.');
+            if (dot && dot != name) {
+                size_t len = dot - name;
+                len = len < sizeof(basename)-1 ? len : sizeof(basename)-1;
+                memcpy(basename, name, len);
+                basename[len] = '\0';
+            } else {
+                strncpy(basename, name, sizeof(basename)-1);
+                basename[sizeof(basename)-1] = '\0';
+            }
 
-  
-    char cmd[PATH_MAX + 20];
-    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", g_file->archiveDir);
-    system(cmd);
-    g_file->archiveDir[0] = '\0'; 
+            snprintf(zip_path, sizeof(zip_path),
+                     "%s_archive_%04d%02d%02d_%02d%02d%02d.zip",
+                     basename,
+                     tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+            if (create_zip(g_file->archiveDir, zip_path) == 0) {
+                remove_directory_recursively(g_file->archiveDir);
+            } else {
+                fprintf(stderr, "WARNING: Failed to create ZIP archive: %s\n"
+                                "         Archive directory kept: %s\n",
+                                zip_path, g_file->archiveDir);
+            }
+
+            g_file->archiveDir[0] = '\0';
+        }
+
+        if (g_file->output) {
+            fclose(g_file->output);
+            g_file->output = NULL;
+        }
+        free(g_file);
+        g_file = NULL;
+    } 
+
+    logger_type = 0;
+    logger_initialized = 0;
+    unlock();
 }
-
-  if(g_network){
-
-    free_network_log(g_network);
-    g_network = NULL;
-
-  }
-
-  logger_type = 0;
-  unlock();
-
-}
-
-
