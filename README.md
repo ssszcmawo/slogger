@@ -12,7 +12,9 @@ int main() {
     set_log_level(DEBUG);
 
     log_message(INFO, "console logging");
-    log_messagef(DEBUG, "formatted message: %d %s", 42, "hello");
+    log_message(DEBUG,"debug message");
+    log_message(ERROR,"error message");
+    log_message(WARNING,"warning message;
 
     close_logging();
     return 0;
@@ -25,11 +27,11 @@ int main() {
 #include "slogger.h"
 
 int main() {
-    init_fileLog("logs/log.txt", 1024 * 1024, true); // 1 MB max size, archive enabled
+    init_fileLog("logs/log.txt", 1024 * 1024, 1); // 1 MB max size, archive enabled
     set_log_level(DEBUG);
 
     log_message(INFO, "file logging");
-    log_messagef(DEBUG, "format example: %d%c%s", 1, '2', "3");
+    log_message(DEBUG,"file logging);
 
     close_logging();
     return 0;
