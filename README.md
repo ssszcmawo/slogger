@@ -42,7 +42,7 @@ int main() {
 
 ```
 INFO 2025-12-04 15:22:11.123456 [T12345] file logging
-DEBUG 2025-12-04 15:22:11.123789 [T12345] format example: 123
+DEBUG 2025-12-04 15:22:11.123789 [T12345] file logging
 ```
 
 ### Multi logging (console + file)
