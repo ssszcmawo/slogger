@@ -251,17 +251,11 @@ int create_zip(const char *folder, const char *zipname)
         return -1;
     }
 
-    cd_offset = ftell(zip_fp);
-
-    fseek(zip_fp, 0, SEEK_SET);
-    walk_dir(folder, folder);
-
-    fseek(zip_fp, 0, SEEK_END);
+    cd_offset = ftell(zip_fp) - cd_size;
     write_eocd();
 
     fclose(zip_fp);
     zip_fp = NULL;
-
 
     struct stat st;
     if (stat(zipname, &st) != 0 || st.st_size < 22) { 
@@ -271,3 +265,4 @@ int create_zip(const char *folder, const char *zipname)
 
     return 0; 
 }
+
