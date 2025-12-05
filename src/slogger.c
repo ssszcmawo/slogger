@@ -19,8 +19,38 @@
 #include <pthread.h>
 #include <ftw.h>
 
+#define CONSOLELOGGER 1
+#define FILELOGGER 2
+
+#define MAX_FILE_NAME 64
+#define DEFAULT_MAX_FILE_SIZE 1048576L
+#define MAX_BUF_SIZE 4096
+#define DEFAULT_MAX_BACKUP_FILES 10
+#define LOG_FILENAME_MAX 4096
+#define MAX_LINE_LEN 256
 #define TIMESTAMP_BUF_SIZE 32
 #define LOG_BUFFER_SIZE 8192
+
+typedef struct FileLog {
+    FILE* output;
+    char fileName[LOG_FILENAME_MAX];
+    long maxFileSize;
+    long currentFileSize;
+    log_level_t level;
+    int maxBackUpFiles;
+    int archiveOldLogs;
+    char archiveDir[LOG_FILENAME_MAX];
+} FileLog;
+
+typedef struct ConsoleLog {
+    FILE* output;
+    log_level_t level;
+} ConsoleLog;
+
+
+static ConsoleLog* g_console = NULL;
+static FileLog*    g_file = NULL;
+
 
 static pthread_mutex_t l_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t logger_once = PTHREAD_ONCE_INIT;
@@ -29,35 +59,60 @@ static log_level_t current_log_level = INFO;
 static int logger_type;
 static int logger_initialized;
 
-static ConsoleLog* g_console = NULL;
-static FileLog*    g_file = NULL;
 
-
-
-static void lock(void) {
+static inline void lock(void) {
   pthread_mutex_lock(&l_mutex);
 }
 
-static void unlock(void) {
+static inline void unlock(void) {
   pthread_mutex_unlock(&l_mutex);
 }
 
-static long getCurrentThreadID(void) {
+static inline long getCurrentThreadID(void) {
   return (long)syscall(SYS_gettid);
 }
 
-static void logger_init(void) {
+static inline void logger_init(void) {
     logger_initialized = 1;
 }
 
-static void ensure_init(void) {
+static inline void ensure_init(void) {
     pthread_once(&logger_once, logger_init);
 }
 
-static int hasFlag(int flags, int flag) {
-
+static inline int hasFlag(int flags, int flag) {
     return (flags & flag) != 0;
+}
 
+void set_log_level(log_level_t level) {
+  current_log_level = level;
+}
+
+log_level_t get_log_level(void) {
+  return current_log_level;
+}
+
+static int file_exists(const char* path) {
+  struct stat st;
+  return (stat(path, &st) == 0);
+}
+
+static const char* level_to_string(log_level_t lvl) {
+  switch (lvl) {
+    case DEBUG: return "DEBUG";
+    case WARNING: return "WARN";
+    case ERROR: return "ERROR";
+    default: return "INFO";
+  }
+}
+
+static const char* level_to_color(log_level_t lvl) {
+  switch (lvl) {
+    case DEBUG:   return COLOR_BLUE;
+    case WARNING: return COLOR_YELLOW;
+    case ERROR:   return COLOR_RED;
+    default:      return COLOR_GREEN;
+  }
 }
 
 static void format_timestamp(char* buf, size_t size) {
@@ -75,38 +130,21 @@ static void format_timestamp(char* buf, size_t size) {
   snprintf(buf + len, (len < size) ? size - len : 0, ".%06ld", (long)tv.tv_usec);
 }
 
-static const char* level_to_string(log_level_t lvl) {
-  switch (lvl) {
-    case DEBUG: return "DEBUG";
-    case WARNING: return "WARN";
-    case ERROR: return "ERROR";
-    default: return "INFO";
-  }
-}
-
-void set_log_level(log_level_t level) {
-  current_log_level = level;
-}
-
-log_level_t get_log_level(void) {
-  return current_log_level;
-}
-
-ConsoleLog* init_consoleLog(FILE* output) {
+int init_consoleLog(FILE* output) {
   ensure_init();
 
   lock();
 
   if(g_console){
     unlock();
-    return g_console;
+    return 1;
   }
 
   ConsoleLog* cl = calloc(1, sizeof(ConsoleLog));
 
   if(!cl){
     unlock();
-    return NULL;
+    return 0;
   }
 
   cl->output = (output ? output : stdout);
@@ -116,47 +154,69 @@ ConsoleLog* init_consoleLog(FILE* output) {
 
   unlock();
 
-  return cl;
+  return 1;
 }
 
+int init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot) {
+    ensure_init();
+    lock();
 
-FileLog* init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot) {
-  ensure_init();
-  lock();
-  if (g_file) { unlock(); return g_file; }
+    if (g_file) { unlock(); return 1; }
 
-  FileLog* fl = calloc(1, sizeof(FileLog));
-  if (!fl) { unlock(); return NULL; }
+    FileLog* fl = calloc(1, sizeof(FileLog));
+    if (!fl) { unlock(); return 0; }
 
-  strncpy(fl->fileName, filename, sizeof(fl->fileName) - 1);
-  fl->fileName[sizeof(fl->fileName) - 1] = '\0';
-  fl->maxFileSize = maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE;
-  fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
-  fl->archiveOldLogs = archiveOrNot;
+    fl->maxFileSize = maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE;
+    fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
+    fl->archiveOldLogs = archiveOrNot;
 
-  if (archiveOrNot) {
-    snprintf(fl->archiveDir, sizeof(fl->archiveDir), "%s_archive", filename);
-    fl->archiveDir[sizeof(fl->archiveDir) - 1] = '\0';
-    if (mkdir(fl->archiveDir, 0755) != 0 && errno != EEXIST) {
-        fprintf(stderr, "ERROR: Cannot create archive directory %s\n", fl->archiveDir);
+    if (archiveOrNot) { 
+        snprintf(fl->archiveDir, sizeof(fl->archiveDir), "%s_archive", filename);
+        fl->archiveDir[sizeof(fl->archiveDir)-1] = '\0';
+
+        if (mkdir(fl->archiveDir, 0755) != 0 && errno != EEXIST) {
+            fprintf(stderr, "ERROR: Cannot create archive directory %s\n", fl->archiveDir);
+            free(fl);
+            unlock();
+            return 0;
+        }
+
+        size_t dir_len = strlen(fl->archiveDir);
+        size_t file_len = strlen(filename);
+
+        if (dir_len + 1 + file_len >= sizeof(fl->fileName)) {
+            fprintf(stderr, "ERROR: Archive path too long\n");
+            free(fl);
+            unlock();
+            return 0;
+        }
+
+        snprintf(fl->fileName, sizeof(fl->fileName), "%s/%s", fl->archiveDir, filename);
+        fl->fileName[sizeof(fl->fileName)-1] = '\0';
+    } else {
+        strncpy(fl->fileName, filename, sizeof(fl->fileName)-1);
+        fl->fileName[sizeof(fl->fileName)-1] = '\0';
+        fl->archiveDir[0] = '\0';
     }
-  }
 
-  fl->output = fopen(filename, "a");
-  if (!fl->output) { free(fl); unlock(); return NULL; }
+    fl->output = fopen(fl->fileName, "a");
+    if (!fl->output) { 
+        fprintf(stderr, "ERROR: Cannot open log file %s\n", fl->fileName);
+        free(fl); 
+        unlock(); 
+        return 0; 
+    }
 
-  fseek(fl->output, 0, SEEK_END);
-  fl->currentFileSize = ftell(fl->output);
-  g_file = fl;
-  logger_type |= FILELOGGER;
-  unlock();
-  return fl;
+    fseek(fl->output, 0, SEEK_END);
+    fl->currentFileSize = ftell(fl->output);
+
+    g_file = fl;
+    logger_type |= FILELOGGER;
+    unlock();
+    return 1;
 }
 
-static int file_exists(const char* path) {
-  struct stat st;
-  return (stat(path, &st) == 0);
-}
+
 
 static void backup_filename(const char* baseName,int index,char* out,size_t outSize){
 
@@ -229,44 +289,6 @@ int rotateFiles(void)
   return 1;
 }
 
-void free_console_log(ConsoleLog* cl) {
-  if (!cl) return;
-
-  free(cl);
-
-  g_console = NULL;
-}
-
-void free_file_log(FileLog* fl) {
-  if (!fl) return;
-
-  if (fl->output) fclose(fl->output); 
-
-  free(fl);
-
-  g_file = NULL;
-}
-
-void free_archive_logs(FileLog* fl){
-
-  if(rmdir(fl->archiveDir) != 0){
-
-    fprintf(stderr,"ERROR: Could not delete directory: %s\n",fl->archiveDir);
-
-    return;
-
-  }
-
-}
-static const char* level_to_color(log_level_t lvl) {
-  switch (lvl) {
-    case DEBUG:   return COLOR_BLUE;
-    case WARNING: return COLOR_YELLOW;
-    case ERROR:   return COLOR_RED;
-    default:      return COLOR_GREEN;
-  }
-}
-
 void log_message(log_level_t level, const char* message) {
     if (level < current_log_level) return;
 
@@ -306,14 +328,29 @@ void log_message(log_level_t level, const char* message) {
     unlock();
 }
 
-void log_messagef(log_level_t level, const char* fmt, ...) {
+void log_messagef(log_level_t level, const char* file, int line, const char* fmt, ...) {
     if (level < current_log_level) return;
-    char buffer[LOG_BUFFER_SIZE];
+
+    char buffer[LOG_BUFFER_SIZE - 64];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
-    log_message(level, buffer);
+
+    char message_with_location[LOG_BUFFER_SIZE];
+    snprintf(message_with_location, sizeof(message_with_location),
+             "%s:%d: %s", file, line, buffer);
+
+    log_message(level, message_with_location);
+}
+
+
+static void free_console_log(ConsoleLog* cl) {
+  if (!cl) return;
+
+  free(cl);
+
+  g_console = NULL;
 }
 
 void clear_log_file(const char* filename) {
