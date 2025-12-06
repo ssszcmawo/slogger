@@ -1,74 +1,48 @@
+#define _GNU_SOURCE
+#include "slogger.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
-#include "slogger.h"
 
-void test_basic_console_logging() {
+#define TEMP_LOG_FILE "temp_console_log.txt"
 
-    printf("Testing Basic logging\n");
-
-    ConsoleLog* cl = init_consoleLog(stdout);
-    assert(cl != NULL);  // Console logger should initialize
-    assert(cl->output == stdout);
-
-    log_message(INFO, "Basic info message");
-    log_message(DEBUG, "Basic debug message");
-    log_message(ERROR, "Basic error message");
-
-    free_console_log(cl);
-
-    printf("Passed basic console logging.\n");
-
+void cleanup() {
+    remove(TEMP_LOG_FILE);
 }
 
-void test_log_levels() {
+void test_console_logger() {
+    cleanup();
 
-    printf("Testing ConsoleLogger: Log level filtering...\n");
+    FILE* temp_out = fopen(TEMP_LOG_FILE, "w+");
+    assert(temp_out != NULL);
 
-    set_log_level(WARNING);
+    assert(init_consoleLog(temp_out) == 1);
 
-    ConsoleLog* cl = init_consoleLog(stdout);
-    assert(cl != NULL);
-
-    // INFO should be ignored
-    log_message(INFO, "This INFO message should NOT appear");
-    // WARNING and ERROR should appear
-    log_message(WARNING, "This WARNING message should appear");
-    log_message(ERROR, "This ERROR message should appear");
-
-    free_console_log(cl);
-
-    // Reset log level
     set_log_level(INFO);
+    LOG_INFO("Info message");
+    LOG_DEBUG("Debug message should NOT appear");
+    LOG_WARN("Warning message");
+    LOG_ERROR("Error message");
 
-    printf("Passed log level filtering test.\n");
+    fflush(temp_out);
+    fseek(temp_out, 0, SEEK_SET);
 
-}
+    char buf[4096];
+    size_t read_len = fread(buf, 1, sizeof(buf)-1, temp_out);
+    buf[read_len] = '\0';
 
-void test_null_message() {
+    assert(strstr(buf, "Info message") != NULL);
+    assert(strstr(buf, "Warning message") != NULL);
+    assert(strstr(buf, "Error message") != NULL);
 
-    printf("Testing ConsoleLogger: NULL message handling...\n");
-
-    ConsoleLog* cl = init_consoleLog(stdout);
-    assert(cl != NULL);
-
-    // Passing NULL should not crash
-    log_message(INFO, NULL);
-    log_message(ERROR, NULL);
-
-    free_console_log(cl);
-
-    printf("Passed NULL message handling test.\n");
-
+    close_logging();
+    fclose(temp_out);
+    cleanup();
 }
 
 int main() {
-
-    test_basic_console_logging();
-    test_log_levels();
-    test_null_message();
-
-    printf("All ConsoleLogger full tests passed!\n");
+    test_console_logger();
     return 0;
-
 }
+

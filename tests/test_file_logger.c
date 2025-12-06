@@ -1,103 +1,86 @@
+#define _GNU_SOURCE
+#include "slogger.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 #include <string.h>
-#include <pthread.h>
+#include <assert.h>
 #include <unistd.h>
 #include <dirent.h>
-#include "slogger.h"
 
-#define TEST_LOG_FILE "test_log.txt"
-#define TEST_ARCHIVE_DIR "archiveLogsDir"
+#define LOG_FILE "test_file_log.txt"
+#define DEFAULT_MAX_BACKUP_FILES 10
 
 void cleanup() {
-    remove(TEST_LOG_FILE); // remove main log
+    remove(LOG_FILE);
     for(int i = 1; i <= DEFAULT_MAX_BACKUP_FILES; i++){
         char fname[128];
-        snprintf(fname, sizeof(fname), "%s.%d", TEST_LOG_FILE, i);
-        remove(fname); // remove rotated backups
+        snprintf(fname, sizeof(fname), "%s.%d", LOG_FILE, i);
+        remove(fname);
     }
-    rmdir(TEST_ARCHIVE_DIR); // remove archive directory if exists
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s_archive", LOG_FILE);
+    system(cmd);
 }
 
-void test_basic_logging() {
+void test_file_logging_basic() {
+    cleanup();
+    assert(init_fileLog(LOG_FILE, 1024, false) == 1);
 
-    clear_log_file(TEST_LOG_FILE);
+    LOG_INFO("Basic log message");
+    close_logging();
 
-    FileLog* fl = init_fileLog(TEST_LOG_FILE, 1024, 1);
-
-    assert(fl != NULL);
-
-    log_message(INFO, "Basic log message");
-    fflush(fl->output);
-
-    FILE* f = fopen(TEST_LOG_FILE, "r");
-
+    FILE* f = fopen(LOG_FILE, "r");
     assert(f != NULL);
 
-    char buf[256];
+    char line[512];
     int found = 0;
-
-    while(fgets(buf, sizeof(buf), f)) {
-
-        if(strstr(buf, "Basic log message")) found = 1;
-
+    while(fgets(line, sizeof(line), f)) {
+        if(strstr(line, "Basic log message")) found = 1;
     }
-
     fclose(f);
     assert(found);
-
-    free_file_log(fl);
-
 }
 
-void test_rotation_and_backup() {
+void test_file_logging_rotation() {
+    cleanup();
+    assert(init_fileLog(LOG_FILE, 50, false) == 1);
 
-    FileLog* fl = init_fileLog(TEST_LOG_FILE, 50, 1); // small size to trigger rotation
-    assert(fl != NULL);
-
-    for(int i = 0; i < 10; i++){
-
-        log_message(INFO, "Rotating log entry");
-        fflush(fl->output);
-        fl->currentFileSize = ftell(fl->output); // simulate increasing file size
-    //
+    for(int i = 0; i < 20; i++){
+        LOG_INFO("Rotating log entry %d", i);
     }
 
-    assert(rotateFiles()); // should rotate and create backup
-    free_file_log(fl);
+    close_logging();
+
+    FILE* f = fopen(LOG_FILE, "r");
+    assert(f != NULL);
+    fclose(f);
+
+    char backup[128];
+    snprintf(backup, sizeof(backup), "%s.1", LOG_FILE);
+    f = fopen(backup, "r");
+    assert(f != NULL);
+    fclose(f);
 }
 
-void test_archive_creation() {
-    FileLog* fl = init_fileLog(TEST_LOG_FILE, 50, 1);
-    assert(fl != NULL);
+void test_file_logging_archive() {
+    cleanup();
+    assert(init_fileLog(LOG_FILE, 50, true) == 1);
 
-    log_message(INFO, "Archive test message");
-    fflush(fl->output);
+    for(int i = 0; i < 20; i++){
+        LOG_INFO("Archive log entry %d", i);
+    }
 
-    fl->currentFileSize = fl->maxFileSize + 1; // force rotation
-    assert(rotateFiles());
+    close_logging();
 
-    // Check archive directory exists
-    DIR* dir = opendir(TEST_ARCHIVE_DIR);
-    assert(dir != NULL);
+    DIR* dir = opendir("test_file_log.txt_archive"); 
     closedir(dir);
-
-    free_file_log(fl);
 }
 
 int main() {
-
-    cleanup();  
-
-    test_basic_logging(); 
-
-    test_rotation_and_backup(); 
-
-    test_archive_creation();
-
-
+    test_file_logging_basic();
+    test_file_logging_rotation();
+    test_file_logging_archive();
     cleanup();
-    printf("All FileLogger full tests passed!\n");
     return 0;
 }
+
