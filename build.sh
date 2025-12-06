@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CC=gcc
-CFLAGS="-Wall -Wextra -Wpedantic -std=c11 -D_GNU_SOURCE -Isrc"
+CFLAGS="-Wall -Wextra -Wpedantic -D_GNU_SOURCE -Isrc"
 LDFLAGS="-lpthread"
 OBJ="obj"
 BIN="bin"
