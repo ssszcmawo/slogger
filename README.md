@@ -2,8 +2,6 @@
 
 Lightweight and dependency-free C logging library. Supports console and file logging, log rotation, simple ZIP archiving, and formatted log output with file/line tracing.
 
----
-
 ## Features
 
 * Console and file logging
@@ -13,8 +11,6 @@ Lightweight and dependency-free C logging library. Supports console and file log
 * Thread-safe using pthread mutex
 * Minimal configuration via `.conf` file
 * Zero external dependencies
-
----
 
 ## Project Structure
 
@@ -45,9 +41,6 @@ slogger/
 ./build.sh run        # run the demo program (bin/myLogger_demo), builds it if necessary
 ./build.sh clean      # remove all object files (obj/) and binaries (bin/*)
 ````
-
----
-
 
 ## Example
 
