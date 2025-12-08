@@ -51,9 +51,9 @@ static inline long getCurrentThreadID(void) { return (long)syscall(SYS_gettid); 
 static inline void logger_init(void) { logger_initialized = 1; }
 static inline void ensure_init(void) { pthread_once(&logger_once, logger_init); }
 static inline int hasFlag(int flags, int flag) { return (flags & flag) != 0; }
+static inline log_level_t get_log_level(void) { return current_log_level; }
 
 void set_log_level(log_level_t level) { current_log_level = level; }
-log_level_t get_log_level(void) { return current_log_level; }
 
 static int file_exists(const char* path) { struct stat st; return (stat(path, &st) == 0); }
 
@@ -201,33 +201,37 @@ static int create_archive_and_cleanup(FileLog* fl)
 
     const char* slash = strrchr(fl->fileName, '/');
     const char* fullname = slash ? slash + 1 : fl->fileName;
-    char basename[128] = "log";
     const char* dot = strrchr(fullname, '.');
+    char basename[128] = "log";
+
     if (dot && dot != fullname) {
         size_t len = dot - fullname;
-        if (len >= sizeof(basename)) len = sizeof(basename)-1;
+        if (len >= sizeof(basename)) len = sizeof(basename) - 1;
         memcpy(basename, fullname, len);
         basename[len] = '\0';
     } else if (fullname[0]) {
-        strncpy(basename, fullname, sizeof(basename)-1);
+        strncpy(basename, fullname, sizeof(basename) - 1);
     }
 
-    char zip_path[PATH_MAX];
-    snprintf(zip_path, sizeof(zip_path),
+    char zip_name[PATH_MAX];
+    snprintf(zip_name, sizeof(zip_name),
              "%s_archive_%04d%02d%02d_%02d%02d%02d.zip",
              basename,
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec);
 
-    if (create_zip(fl->archiveDir, zip_path) != 0) {
-        fprintf(stderr, "ERROR: Failed to create archive %s\n", zip_path);
+    char zip_fullpath[PATH_MAX];
+    snprintf(zip_fullpath, sizeof(zip_fullpath), "%s/%s", fl->archiveDir, zip_name);
+
+    if (create_zip(fl->archiveDir, zip_name) != 0) {
+        fprintf(stderr, "ERROR: Failed to create archive %s\n", zip_fullpath);
         return 0;
     }
 
     return 1;
 }
 
-int rotateFiles(void)
+static int rotateFiles(void)
 {
     if (!g_file || !g_file->output) return 0;
     if (g_file->currentFileSize < g_file->maxFileSize) return 1;
@@ -254,7 +258,7 @@ int rotateFiles(void)
     return 1;
 }
 
-void log_message(log_level_t level, const char* message)
+static void log_message(log_level_t level, const char* message)
 {
     if (level < current_log_level) return;
     ensure_init();
