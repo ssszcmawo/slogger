@@ -16,6 +16,12 @@ Lightweight and dependency-free C logging library. Supports console and file log
 
 ```
 slogger/
+├── examples/
+│   ├── example_console_logger.c   #example of console logger
+│   ├── example_file_logger.c      #example of file logger
+│   ├── example_logger_conf.conf   #example of configuration file
+│   ├── example_multi_logger.c     #example of multi logger
+│
 ├── src/
 │   ├── slogger.c       # Core logging system
 │   ├── config.c        # Config file parser
