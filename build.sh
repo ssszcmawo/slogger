@@ -8,6 +8,7 @@ OBJ="obj"
 BIN="bin"
 SRC="src"
 TEST="tests"
+EXAMPLES="examples"
 
 mkdir -p $OBJ $BIN
 
@@ -29,7 +30,19 @@ test | tests)
   done
   ;;
 
-all) "$0" demo && "$0" test ;;
+examples)
+  $CC $CFLAGS -c $SRC/slogger.c -o $OBJ/slogger.o
+  $CC $CFLAGS -c $SRC/zip.c -o $OBJ/zip.o
+  for e in $EXAMPLES/example_*.c; do
+    name=$(basename "$e" .c)
+    $CC $CFLAGS "$e" $OBJ/slogger.o $OBJ/zip.o $LDFLAGS -o "$BIN/$name"
+    echo "Example built: $BIN/$name"
+  done
+  ;;
+
+all)
+  "$0" demo && "$0" test && "$0" examples
+  ;;
 
 run)
   [ -f "$BIN/myLogger_demo" ] || "$0" demo
@@ -42,7 +55,7 @@ clean)
   ;;
 
 *)
-  echo "Usage: $0 {demo|test|all|run|clean}"
+  echo "Usage: $0 {demo|test|examples|all|run|clean}"
   exit 1
   ;;
 esac
