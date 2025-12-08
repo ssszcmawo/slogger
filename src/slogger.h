@@ -21,16 +21,13 @@ typedef enum LogLevel {
 } log_level_t;
 
 void set_log_level(log_level_t level);
-log_level_t get_log_level(void);
 
 int init_consoleLog(FILE* output);
 
 int init_fileLog(const char* filename, long maxFileSize,bool archiveOrNot);
-int rotateFiles();
 
-void log_message(log_level_t level, const char* message);
 void log_messagef(log_level_t level, const char* file, int line, const char* fmt, ...);
-void clear_log_file(const char* filename);
+
 void close_logging(void);
 
 
