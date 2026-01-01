@@ -36,8 +36,18 @@ slogger/
 ├── Makefile
 ├── build.sh
 ```
+## How to use
+1. Copy the entire `src/` folder into your project.
 
-
+2. In your source files, include the header:
+```c
+#include "src/slogger.h"
+#include "src/logconf.h"
+```
+3. Add all .c files from src/ to your build:
+```c
+ gcc -o myapp main.c src/slogger.c src/zip.c src/logconf.c -pthread
+```
 ## Builds
 ```c
 ./build.sh demo       # build the demo program (src/main.c), output: bin/myLogger_demo
