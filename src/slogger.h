@@ -1,3 +1,6 @@
+#ifdef __cplusplus
+extern "C"{
+#endif
 #ifndef SLOGGER_H
 #define SLOGGER_H
 
@@ -38,4 +41,7 @@ void close_logging(void);
 #define LOG_ERROR(fmt, ...) log_messagef(ERROR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
 
+#endif
+#ifdef __cplusplus
+}
 #endif
