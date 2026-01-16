@@ -1,3 +1,6 @@
+#ifdef __cplusplus
+extern "C"{
+#endif
 #ifndef LOGCONF_H
 #define LOGCONF_H
 
@@ -45,3 +48,6 @@ int configure_logger(const char* config_path);
  */
 
 #endif // LOGCONF_H
+#ifdef __cplusplus
+}
+#endif
