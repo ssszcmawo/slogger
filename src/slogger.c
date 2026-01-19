@@ -82,6 +82,7 @@ static const char* level_to_string(log_level_t lvl)
         case DEBUG:   return "DEBUG";
         case WARNING: return "WARN";
         case ERROR:   return "ERROR";
+        case TRACE:   return "TRACE";
         default:      return "INFO";
     }
 }
@@ -92,6 +93,7 @@ static const char* level_to_color(log_level_t lvl)
         case DEBUG:   return COLOR_BLUE;
         case WARNING: return COLOR_YELLOW;
         case ERROR:   return COLOR_RED;
+        case TRACE:   return COLOR_ORANGE;
         default:      return COLOR_GREEN;
     }
 }

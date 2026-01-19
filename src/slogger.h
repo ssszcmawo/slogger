@@ -15,12 +15,14 @@ extern "C"{
 #define COLOR_GREEN   "\033[32m"
 #define COLOR_YELLOW  "\033[33m"
 #define COLOR_BLUE    "\033[34m"
+#define COLOR_ORANGE "\033[38;5;208m"
 
 typedef enum LogLevel {
     INFO,
     DEBUG,
     WARNING,
-    ERROR
+    ERROR,
+    TRACE
 } log_level_t;
 
 void set_log_level(log_level_t level);
