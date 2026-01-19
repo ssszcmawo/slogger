@@ -1,0 +1,11 @@
+obj/
+
+bin/
+
+src/logconf.h
+
+src/logconf.c
+
+tests/logconf.c
+
+examples/example_logger_conf.conf
