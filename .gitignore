@@ -4,4 +4,6 @@ obj/
 
 bin/
 
+src/logconf.h
 
+src/logconf.c
