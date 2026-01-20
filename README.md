@@ -1,15 +1,13 @@
 # slogger
 
-Lightweight and dependency-free C logging library. Supports console and file logging, log rotation, simple ZIP archiving, and formatted log output with file/line tracing.
+Lightweight and dependency-free C logging library. Supports console and file logging, log rotation and formatted log output with file/line tracing.
 
 ## Features
 
 * Console and file logging
 * Log levels: DEBUG, INFO, WARNING, ERROR
 * Log rotation based on maximum file size
-* Optional archiving of old logs into ZIP (store method only, no compression)
 * Thread-safe using pthread mutex
-* Minimal configuration via `.conf` file
 * Zero external dependencies
 
 ## Project Structure
@@ -19,19 +17,15 @@ slogger/
 ├── examples/
 │   ├── example_console_logger.c   #example of console logger
 │   ├── example_file_logger.c      #example of file logger
-│   ├── example_logger_conf.conf   #example of configuration file
 │   ├── example_multi_logger.c     #example of multi logger
 │
 ├── src/
 │   ├── slogger.c       # Core logging system
-│   ├── config.c        # Config file parser
-│   ├── zip.c           # Simple implementation of ZIP archive
-│   └── ...
+│   ├── slogger.h       # Header to include in your project
 │   
 ├── tests/
 │   ├── test_console_logger.c    # tests for console logger
 │   ├── test_file_logger.c       # tests for file logger
-│   ├── test_logconf.c           # tests for log configuration
 ├── README.md
 ├── Makefile
 ├── build.sh
@@ -41,12 +35,11 @@ slogger/
 
 2. In your source files, include the header:
 ```c
-#include "src/slogger.h"
 #include "src/logconf.h"
 ```
 3. Add all .c files from src/ to your build:
 ```c
- gcc -o myapp main.c src/slogger.c src/zip.c src/logconf.c -pthread
+ gcc -o myapp main.c src/slogger.c -pthread
 ```
 ## Builds
 ```c
