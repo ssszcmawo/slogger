@@ -23,9 +23,6 @@ slogger/
 │   ├── slogger.c       # Core logging system
 │   ├── slogger.h       # Header to include in your project
 │   
-├── tests/
-│   ├── test_console_logger.c    # tests for console logger
-│   ├── test_file_logger.c       # tests for file logger
 ├── README.md
 ├── Makefile
 ├── build.sh
