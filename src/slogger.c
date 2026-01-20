@@ -109,6 +109,25 @@ static void format_timestamp(char* buf, size_t size)
     snprintf(buf + len, size - len, ".%06ld", (long)tv.tv_usec);
 }
 
+static void split_path(const char* path,char* dir,char* name)
+{
+  const char* slash = strrchr(path,'/');
+  if(!slash)
+  {
+    dir[0] = '.';
+    dir[1] = '\0';
+    strncpy(name,path,LOG_FILENAME_MAX - 1);
+    name[LOG_FILENAME_MAX - 1] = '\0';
+  }else{
+    size_t dirlen = slash - path;
+    if(dirlen >= LOG_FILENAME_MAX) dirlen = LOG_FILENAME_MAX - 1;
+    memcpy(dir,path,dirlen);
+    dir[dirlen] = '\0';
+    strncpy(name,slash + 1,LOG_FILENAME_MAX - 1);
+    name[LOG_FILENAME_MAX - 1] = '\0';
+  }
+}
+
 int init_consoleLog(FILE* output)
 {
     ensure_init();
@@ -136,14 +155,35 @@ int init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot)
     fl->maxBackUpFiles = DEFAULT_MAX_BACKUP_FILES;
     fl->archiveOldLogs = archiveOrNot;
 
+    char dir[LOG_FILENAME_MAX];
+    char name[LOG_FILENAME_MAX];
+    split_path(filename, dir, name);
+
     if (archiveOrNot) {
-        snprintf(fl->archiveDir, sizeof(fl->archiveDir), "%s_archive", filename);
-        fl->archiveDir[sizeof(fl->archiveDir)-1] = '\0';
-        if (mkdir(fl->archiveDir, 0755) != 0 && errno != EEXIST) {
-            free(fl); unlock(); return 0;
+        size_t ad = snprintf(fl->archiveDir, sizeof(fl->archiveDir), "%s/archive", dir);
+
+        if(ad >= sizeof(fl->archiveDir))
+        {
+          free(fl);
+          unlock();
+          return 0;
         }
-        snprintf(fl->fileName, sizeof(fl->fileName), "%s/%s", fl->archiveDir, filename);
-        fl->fileName[sizeof(fl->fileName)-1] = '\0';
+        
+        fl->archiveDir[sizeof(fl->archiveDir)-1] = '\0';
+
+        if (mkdir(fl->archiveDir, 0755) != 0 && errno != EEXIST) {
+            free(fl);
+            unlock();
+            return 0;
+        }
+
+        size_t fn = snprintf(fl->fileName, sizeof(fl->fileName), "%s/%s", fl->archiveDir, name);
+        if(fn >= sizeof(filename))
+        {
+          free(fl);
+          unlock();
+          return 0;
+        }
     } else {
         strncpy(fl->fileName, filename, sizeof(fl->fileName)-1);
         fl->fileName[sizeof(fl->fileName)-1] = '\0';
@@ -153,10 +193,16 @@ int init_fileLog(const char* filename, long maxFileSize, bool archiveOrNot)
     fl->output = fopen(fl->fileName, "a");
     if (!fl->output) {
         fprintf(stderr, "ERROR: Cannot open log file %s\n", fl->fileName);
-        free(fl); unlock(); return 0;
+        free(fl);
+        unlock();
+        return 0;
     }
-    fseek(fl->output, 0, SEEK_END);
-    fl->currentFileSize = ftell(fl->output);
+ 
+    struct stat st;
+    if(stat(fl->fileName,&st) == 0)
+    {
+      fl->currentFileSize = st.st_size;
+    } 
 
     g_file = fl;
     logger_type |= FILELOGGER;
@@ -223,7 +269,9 @@ static int create_archive_and_cleanup(FileLog* fl)
              tm.tm_hour, tm.tm_min, tm.tm_sec);
 
     char zip_fullpath[PATH_MAX];
-    snprintf(zip_fullpath, sizeof(zip_fullpath), "%s/%s", fl->archiveDir, zip_name);
+    size_t zip_fp = snprintf(zip_fullpath, sizeof(zip_fullpath), "%s/%s", fl->archiveDir, zip_name);
+    
+    if(zip_fp >= sizeof(zip_fullpath)) return 0;
 
     if (create_zip(fl->archiveDir, zip_name) != 0) {
         fprintf(stderr, "ERROR: Failed to create archive %s\n", zip_fullpath);
@@ -309,7 +357,12 @@ void log_messagef(log_level_t level, const char* file, int line, const char* fmt
 void close_logging(void)
 {
     lock();
-    if (g_console) { free(g_console); g_console = NULL; }
+    if (g_console)
+    {
+      fclose(g_console->output);
+      free(g_console);
+      g_console = NULL; 
+    }
     if (g_file) {
         if (g_file->output) fclose(g_file->output);
         free(g_file);
