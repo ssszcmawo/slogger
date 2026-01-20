@@ -251,6 +251,8 @@ void close_logging(void) {
     lock();
 
     if (g_console) {
+        if(g_console->output)
+          fclose(g_console->output);
         free(g_console);
         g_console = NULL;
     }
