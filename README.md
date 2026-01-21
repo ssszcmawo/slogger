@@ -5,7 +5,7 @@ Lightweight and dependency-free C logging library. Supports console and file log
 ## Features
 
 * Console and file logging
-* Log levels: DEBUG, INFO, WARNING, ERROR
+* Log levels: DEBUG, INFO, WARNING, ERROR,TRACE
 * Log rotation based on maximum file size
 * Thread-safe using pthread mutex
 * Zero external dependencies
@@ -41,8 +41,6 @@ slogger/
 ## Builds
 ```c
 ./build.sh demo       # build the demo program (src/main.c), output: bin/myLogger_demo
-./build.sh test       # build all test programs in tests/, output: bin/test_*
-./build.sh tests      # same as 'test', build all test programs
 ./build.sh examples   # build examples
 ./build.sh all        # build both demo and tests
 ./build.sh run        # run the demo program (bin/myLogger_demo), builds it if necessary
