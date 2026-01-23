@@ -16,14 +16,16 @@ extern "C" {
 #define COLOR_ORANGE "\033[38;5;208m"
 
 typedef enum {
-    INFO,
-    DEBUG,
-    WARNING,
-    ERROR,
-    TRACE
+    DEBUG = 0,
+    INFO = 1,
+    WARNING = 2,
+    ERROR = 3,
+    TRACE = 4
 } log_level_t;
 
 void set_log_level(log_level_t level);
+
+void start_logging_thread(void);
 
 int init_consoleLog(FILE* output);
 
