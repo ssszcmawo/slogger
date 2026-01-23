@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "slogger.h"
+#include "ring_buffer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,10 @@
 #define LOG_BUFFER_SIZE    8192
 #define TIMESTAMP_BUF_SIZE 32
 
+#define RING_SIZE 1024
+#define LOG_TEXT_SIZE 512
+#define TS_SIZE 32
+
 typedef struct {
     FILE* output;
     log_level_t level;
@@ -36,26 +41,30 @@ typedef struct {
     log_level_t level;
 } FileLog;
 
+typedef struct
+{
+  log_level_t level;
+  long tid;
+  char timestamp[TIMESTAMP_BUF_SIZE];
+  char text[LOG_TEXT_SIZE];
+} log_entry_t;
+
 static ConsoleLog* g_console = NULL;
 static FileLog*    g_file    = NULL;
 
-static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_once_t  g_once  = PTHREAD_ONCE_INIT;
+static ring_buffer_t g_ring;
+static log_entry_t g_storage[RING_SIZE];
+
+static pthread_t g_thread;
+static atomic_int g_run = 0;
 
 static log_level_t g_log_level = INFO;
 static int g_logger_type = 0;
 
-static inline void lock(void)   { pthread_mutex_lock(&g_mutex); }
-static inline void unlock(void) { pthread_mutex_unlock(&g_mutex); }
+static int dropped_log = 0;
 
 static inline long thread_id(void) {
     return (long)syscall(SYS_gettid);
-}
-
-static void logger_init_once(void) { }
-
-static inline void ensure_init(void) {
-    pthread_once(&g_once, logger_init_once);
 }
 
 void set_log_level(log_level_t level) {
@@ -92,26 +101,16 @@ static void format_timestamp(char* buf, size_t size) {
     snprintf(buf + len, size - len, ".%06ld", (long)tv.tv_usec);
 }
 
-int init_consoleLog(FILE* output) {
-    ensure_init();
-    lock();
-
-    if (g_console) {
-        unlock();
-        return 1;
-    }
+int init_consoleLog(FILE* output) { 
+    if (g_console) return 1;
 
     g_console = calloc(1, sizeof(ConsoleLog));
-    if (!g_console) {
-        unlock();
-        return 0;
-    }
+    if (!g_console) return 0;
 
     g_console->output = output ? output : stdout;
     g_console->level  = g_log_level;
 
     g_logger_type |= CONSOLELOGGER;
-    unlock();
     return 1;
 }
 
@@ -157,20 +156,11 @@ static int rotate_files(void) {
     return 1;
 }
 
-int init_fileLog(const char* filename, long maxFileSize) {
-    ensure_init();
-    lock();
-
-    if (g_file) {
-        unlock();
-        return 1;
-    }
+int init_fileLog(const char* filename, long maxFileSize) { 
+    if (g_file) return 1; 
 
     FileLog* fl = calloc(1, sizeof(FileLog));
-    if (!fl) {
-        unlock();
-        return 0;
-    }
+    if (!fl) return 0; 
 
     fl->maxFileSize = maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE;
     fl->maxBackups  = DEFAULT_MAX_BACKUP_FILES;
@@ -181,7 +171,6 @@ int init_fileLog(const char* filename, long maxFileSize) {
     fl->output = fopen(fl->fileName, "a");
     if (!fl->output) {
         free(fl);
-        unlock();
         return 0;
     }
 
@@ -189,16 +178,12 @@ int init_fileLog(const char* filename, long maxFileSize) {
 
     g_file = fl;
     g_logger_type |= FILELOGGER;
-    unlock();
     return 1;
 }
 
 static void log_message(log_level_t level, const char* msg) {
     if (level < g_log_level)
         return;
-
-    ensure_init();
-    lock();
 
     char ts[TIMESTAMP_BUF_SIZE];
     format_timestamp(ts, sizeof(ts));
@@ -229,42 +214,66 @@ static void log_message(log_level_t level, const char* msg) {
         fflush(g_file->output);
     }
 
-    unlock();
 }
-
-void log_messagef(log_level_t level, const char* file, int line, const char* fmt, ...) {
-    if (level < g_log_level)
+void log_messagef(log_level_t level, const char* file, int line, const char* fmt, ...) { if (level < g_log_level)
         return;
 
-    char buf[LOG_BUFFER_SIZE - 64];
+    log_entry_t entry;
+    entry.level = level;
+    entry.tid = thread_id();
+    format_timestamp(entry.timestamp,sizeof(entry.timestamp));
+
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    vsnprintf(entry.text, sizeof(entry.text), fmt, ap);
     va_end(ap);
 
-    char msg[LOG_BUFFER_SIZE];
-    snprintf(msg, sizeof(msg), "%s:%d: %s", file, line, buf);
-    log_message(level, msg);
+    char final[LOG_TEXT_SIZE];
+    size_t max_text = sizeof(final) - 32;
+    snprintf(final, sizeof(final), "%s:%d: %.*s", file, line,(int)max_text, entry.text);
+    strncpy(entry.text, final, sizeof(entry.text) - 1);
+    entry.text[LOG_TEXT_SIZE - 1] = '\0';
+
+    if(!ring_push(&g_ring,&entry,sizeof(log_entry_t)))
+    {
+      dropped_log++; 
+    }
+    
+}
+
+static void* logger_thread(void* /*arg*/) {
+    log_entry_t entry;
+    while (atomic_load(&g_run)) {
+        while (ring_pop(&g_ring, &entry, sizeof(entry))) {
+            log_message(entry.level, entry.text);
+        }
+        usleep(1000);
+    }
+    while (ring_pop(&g_ring, &entry, sizeof(entry))) {
+        log_message(entry.level, entry.text);
+    }
+    return NULL;
+}
+
+void start_logging_thread(void) {
+    ring_init(&g_ring, g_storage, RING_SIZE);
+    atomic_store(&g_run, 1);
+    pthread_create(&g_thread, NULL, logger_thread, NULL);
 }
 
 void close_logging(void) {
-    lock();
-
+    atomic_store(&g_run, 0);
+    pthread_join(g_thread, NULL);
     if (g_console) {
-        if(g_console->output)
-          fclose(g_console->output);
+        if (g_console->output) fclose(g_console->output);
         free(g_console);
         g_console = NULL;
     }
-
     if (g_file) {
-        if (g_file->output)
-            fclose(g_file->output);
+        if (g_file->output) fclose(g_file->output);
         free(g_file);
         g_file = NULL;
     }
-
     g_logger_type = 0;
-    unlock();
 }
 
