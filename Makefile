@@ -1,28 +1,22 @@
-# compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -g -pthread
+CFLAGS = -Wall -Wextra -g -pthread -I$(SRC_DIR) -I$(COMMON_DIR)
 
-# Directories
-SRC_DIR = src
+SRC_DIR     = src
+COMMON_DIR  = common
 EXAMPLES_DIR = examples
-OBJ_DIR = obj
-BIN_DIR = bin
+OBJ_DIR     = obj
+BIN_DIR     = bin
 
-# Source files
-SRCS = $(wildcard $(SRC_DIR)/*.c)
-MAIN_SRC = $(SRC_DIR)/main.c
-OTHER_SRCS = $(filter-out $(MAIN_SRC), $(SRCS))
+SRCS        = $(wildcard $(SRC_DIR)/*.c) $(wildcard $(COMMON_DIR)/*.c)
+MAIN_SRC    = $(SRC_DIR)/main.c
+OTHER_SRCS  = $(filter-out $(MAIN_SRC), $(SRCS))
 
-# Objects for main binary
-MAIN_OBJ = $(OBJ_DIR)/main.o
-OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(OTHER_SRCS))
+MAIN_OBJ    = $(OBJ_DIR)/main.o
+OBJS        = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(filter $(SRC_DIR)/%.c,$(OTHER_SRCS))) \
+              $(patsubst $(COMMON_DIR)/%.c,$(OBJ_DIR)/%.o,$(filter $(COMMON_DIR)/%.c,$(OTHER_SRCS)))
 
-# Main binary
 BIN = $(BIN_DIR)/slogger
 
-# ========================
-# Default: build main binary
-# ========================
 all: $(BIN)
 
 $(BIN): $(OBJS) $(MAIN_OBJ)
@@ -35,33 +29,25 @@ $(MAIN_OBJ): $(MAIN_SRC) | $(OBJ_DIR)
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# ========================
-# Build examples: one binary per example
-# ========================
+$(OBJ_DIR)/%.o: $(COMMON_DIR)/%.c | $(OBJ_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 EXAMPLE_SRCS = $(wildcard $(EXAMPLES_DIR)/*.c)
 EXAMPLE_BINS = $(patsubst $(EXAMPLES_DIR)/%.c,$(BIN_DIR)/example-%,$(EXAMPLE_SRCS))
 
 examples: $(EXAMPLE_BINS)
 
 $(BIN_DIR)/example-%: $(EXAMPLES_DIR)/%.c $(OBJS) | $(BIN_DIR) $(OBJ_DIR)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@
 
-
-# ========================
-# Folders
-# ========================
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-
-# ========================
-# Clean
-# ========================
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
 
-.PHONY: all test examples clean
+.PHONY: all examples clean
 
