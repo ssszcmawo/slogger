@@ -7,45 +7,45 @@ Lightweight and dependency-free C logging library. Supports console and file log
 * Console and file logging
 * Log levels: DEBUG, INFO, WARNING, ERROR,TRACE
 * Log rotation based on maximum file size
-* Thread-safe using pthread mutex
+* Using SPSC Lock-Free Ring Buffer
 * Zero external dependencies
+* Compatible with both C and C++
+
 
 ## Project Structure
 
 ```
 slogger/
+├── common/                        #directory for utilities
+│
 ├── examples/
 │   ├── example_console_logger.c   #example of console logger
 │   ├── example_file_logger.c      #example of file logger
 │   ├── example_multi_logger.c     #example of multi logger
 │
 ├── src/
-│   ├── slogger.c       # Core logging system
-│   ├── slogger.h       # Header to include in your project
+│   ├── slogger.c                  # Core logging system
+│   ├── slogger.h                  # Header to include in your project
 │   
 ├── README.md
 ├── Makefile
-├── build.sh
 ```
-## How to use
-1. Copy the entire `src/` folder into your project.
-
-2. In your source files, include the header:
+## How to use (with Git submodule)
+1. Add the logger repository as a submodule in your project:
 ```c
-#include "src/logconf.h"
+git submodule add <https://github.com/ssszcmawo/slogger> your_dir/slogger
+git submodule update --init --recursive
 ```
-3. Add all .c files from src/ to your build:
+2. Add the source files from the submodule to your build:
 ```c
- gcc -o myapp main.c src/slogger.c -pthread
+#include "slogger.h"
 ```
-## Builds
+3. Add all .c files from slogger/ to your build:
 ```c
-./build.sh demo       # build the demo program (src/main.c), output: bin/myLogger_demo
-./build.sh examples   # build examples
-./build.sh all        # build both demo and tests
-./build.sh run        # run the demo program (bin/myLogger_demo), builds it if necessary
-./build.sh clean      # remove all object files (obj/) and binaries (bin/*)
-````
+ gcc -o myapp main.c \
+    external/slogger/src/slogger.c \
+    external/slogger/common/ring_buffer.c -pthread
+```
 
 ## Example
 
