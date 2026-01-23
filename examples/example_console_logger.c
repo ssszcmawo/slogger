@@ -3,6 +3,7 @@
 int main() {
     // Initializes the logger and sets the output stream
     // stderr is commonly used for logs and error messages
+    start_logging_thread();
     init_consoleLog(stderr);
 
     // Sets the minimum log level to display
@@ -20,6 +21,8 @@ int main() {
 
     // Logs a warning message (used for potential issues)
     LOG_WARN("WARNING MESSAGE");
+
+    LOG_TRACE("TRACE MESSAGE");
 
     // Releases resources and properly shuts down the logger
     close_logging();
