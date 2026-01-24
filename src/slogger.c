@@ -94,7 +94,12 @@ static const char* level_to_color(log_level_t lvl) {
 static void format_timestamp(char* buf, size_t size) {
     struct timeval tv;
     struct tm tm;
-    gettimeofday(&tv, NULL);
+    if(gettimeofday(&tv, NULL) != 0)
+    {
+      perror("gettimeofday failed");
+      snprintf(buf,size,"1970-01-01 00:00:00.000000");
+      return;
+    }
     localtime_r(&tv.tv_sec, &tm);
     strftime(buf, size, "%Y-%m-%d %H:%M:%S", &tm);
     size_t len = strlen(buf);
@@ -105,7 +110,11 @@ int init_consoleLog(FILE* output) {
     if (g_console) return 1;
 
     g_console = calloc(1, sizeof(ConsoleLog));
-    if (!g_console) return 0;
+    if (!g_console)
+    {
+      perror("Failed to allocate ConsoleLog");
+      return 0;
+    }
 
     g_console->output = output ? output : stdout;
     g_console->level  = g_log_level;
@@ -116,42 +125,56 @@ int init_consoleLog(FILE* output) {
 
 static int get_file_size(const char* path, long* size) {
     struct stat st;
-    if (stat(path, &st) != 0)
+    if (stat(path, &st) != 0) {
+        if (errno != ENOENT)
+            perror("stat failed");
+        *size = 0;
         return 0;
+    }
     *size = st.st_size;
     return 1;
 }
 
-static void rotate_backups(const char* base, int max) {
+static int rotate_backups(const char* base, int max) {
     char old_path[PATH_MAX];
     char new_path[PATH_MAX];
 
     for (int i = max; i >= 2; --i) {
         snprintf(old_path, sizeof(old_path), "%s.%d", base, i - 1);
         snprintf(new_path, sizeof(new_path), "%s.%d", base, i);
-        rename(old_path, new_path);
+        if (rename(old_path, new_path) != 0 && errno != ENOENT) {
+            fprintf(stderr, "Failed to rename %s to %s: %s\n", old_path, new_path, strerror(errno));
+            return 0;
+        }
     }
 
     snprintf(new_path, sizeof(new_path), "%s.1", base);
-    rename(base, new_path);
+    if (rename(base, new_path) != 0 && errno != ENOENT) {
+        fprintf(stderr, "Failed to rename %s to %s: %s\n", base, new_path, strerror(errno));
+        return 0;
+    }
+    return 1;
 }
 
 static int rotate_files(void) {
-    if (!g_file || !g_file->output)
-        return 0;
+    if (!g_file || !g_file->output) return 0;
 
-    if (g_file->currentFileSize < g_file->maxFileSize)
-        return 1;
+    if (g_file->currentFileSize < g_file->maxFileSize) return 1;
 
-    fclose(g_file->output);
+    if (fclose(g_file->output) != 0) {
+        perror("Failed to close log file before rotation");
+    }
     g_file->output = NULL;
 
-    rotate_backups(g_file->fileName, g_file->maxBackups);
+    if (!rotate_backups(g_file->fileName, g_file->maxBackups)) {
+        fprintf(stderr, "Failed to rotate backup files\n");
+    }
 
     g_file->output = fopen(g_file->fileName, "w");
-    if (!g_file->output)
+    if (!g_file->output) {
+        perror("Failed to open new log file after rotation");
         return 0;
-
+    }
     g_file->currentFileSize = 0;
     return 1;
 }
@@ -160,7 +183,10 @@ int init_fileLog(const char* filename, long maxFileSize) {
     if (g_file) return 1; 
 
     FileLog* fl = calloc(1, sizeof(FileLog));
-    if (!fl) return 0; 
+    if (!fl) {
+        perror("Failed to allocate FileLog");
+        return 0; 
+    }
 
     fl->maxFileSize = maxFileSize > 0 ? maxFileSize : DEFAULT_MAX_FILE_SIZE;
     fl->maxBackups  = DEFAULT_MAX_BACKUP_FILES;
@@ -170,6 +196,7 @@ int init_fileLog(const char* filename, long maxFileSize) {
 
     fl->output = fopen(fl->fileName, "a");
     if (!fl->output) {
+        perror("Failed to open log file");
         free(fl);
         return 0;
     }
@@ -182,46 +209,43 @@ int init_fileLog(const char* filename, long maxFileSize) {
 }
 
 static void log_message(log_level_t level, const char* msg) {
-    if (level < g_log_level)
-        return;
+    if (level < g_log_level) return;
 
     char ts[TIMESTAMP_BUF_SIZE];
     format_timestamp(ts, sizeof(ts));
     long tid = thread_id();
 
     if ((g_logger_type & CONSOLELOGGER) && g_console) {
-        fprintf(g_console->output, "%s%s [%s] [T%ld] %s%s\n",
-                level_to_color(level),
-                ts,
-                level_to_string(level),
-                tid,
-                msg,
-                COLOR_RESET);
-        fflush(g_console->output);
+        if (fprintf(g_console->output, "%s%s [%s] [T%ld] %s%s\n",
+                level_to_color(level), ts, level_to_string(level), tid, msg, COLOR_RESET) < 0) {
+            perror("Failed to write to console");
+        }
+        if (fflush(g_console->output) != 0)
+            perror("Failed to flush console");
     }
 
     if ((g_logger_type & FILELOGGER) && g_file && g_file->output) {
-        long written = fprintf(g_file->output, "%s [%s] [T%ld] %s\n",
-                               ts,
-                               level_to_string(level),
-                               tid,
-                               msg);
-        if (written > 0) {
+        long written = fprintf(g_file->output, "%s [%s] [T%ld] %s\n", ts, level_to_string(level), tid, msg);
+        if (written < 0) {
+            perror("Failed to write to log file");
+        } else {
             g_file->currentFileSize += written;
             if (g_file->currentFileSize >= g_file->maxFileSize)
-                rotate_files();
+                if (!rotate_files())
+                    fprintf(stderr, "Failed to rotate log files\n");
         }
-        fflush(g_file->output);
+        if (fflush(g_file->output) != 0)
+            perror("Failed to flush log file");
     }
-
 }
-void log_messagef(log_level_t level, const char* file, int line, const char* fmt, ...) { if (level < g_log_level)
-        return;
+
+void log_messagef(log_level_t level, const char* file, int line, const char* fmt, ...) {
+    if (level < g_log_level) return;
 
     log_entry_t entry;
     entry.level = level;
     entry.tid = thread_id();
-    format_timestamp(entry.timestamp,sizeof(entry.timestamp));
+    format_timestamp(entry.timestamp, sizeof(entry.timestamp));
 
     va_list ap;
     va_start(ap, fmt);
@@ -229,16 +253,14 @@ void log_messagef(log_level_t level, const char* file, int line, const char* fmt
     va_end(ap);
 
     char final[LOG_TEXT_SIZE];
-    size_t max_text = sizeof(final) - 32;
-    snprintf(final, sizeof(final), "%s:%d: %.*s", file, line,(int)max_text, entry.text);
-    strncpy(entry.text, final, sizeof(entry.text) - 1);
-    entry.text[LOG_TEXT_SIZE - 1] = '\0';
+    snprintf(final, sizeof(final), "%s:%d: %.*s", file, line, (int)(sizeof(final)-50), entry.text);
+    strncpy(entry.text, final, sizeof(entry.text)-1);
+    entry.text[LOG_TEXT_SIZE-1] = '\0';
 
-    if(!ring_push(&g_ring,&entry,sizeof(log_entry_t)))
-    {
-      dropped_log++; 
+    if (!ring_push(&g_ring, &entry, sizeof(log_entry_t))) {
+        dropped_log++;
+        fprintf(stderr, "Logger ring buffer full, dropped %d logs\n", dropped_log);
     }
-    
 }
 
 static void* logger_thread(void* /*arg*/) {
@@ -249,6 +271,7 @@ static void* logger_thread(void* /*arg*/) {
         }
         usleep(1000);
     }
+
     while (ring_pop(&g_ring, &entry, sizeof(entry))) {
         log_message(entry.level, entry.text);
     }
@@ -258,22 +281,31 @@ static void* logger_thread(void* /*arg*/) {
 void start_logging_thread(void) {
     ring_init(&g_ring, g_storage, RING_SIZE);
     atomic_store(&g_run, 1);
-    pthread_create(&g_thread, NULL, logger_thread, NULL);
+    if (pthread_create(&g_thread, NULL, logger_thread, NULL) != 0) {
+        perror("Failed to create logger thread");
+        atomic_store(&g_run, 0);
+    }
 }
 
 void close_logging(void) {
     atomic_store(&g_run, 0);
-    pthread_join(g_thread, NULL);
+    if (pthread_join(g_thread, NULL) != 0)
+        perror("Failed to join logger thread");
+
     if (g_console) {
-        if (g_console->output) fclose(g_console->output);
+        if (g_console->output && g_console->output != stdout && fclose(g_console->output) != 0)
+            perror("Failed to close console output");
         free(g_console);
         g_console = NULL;
     }
+
     if (g_file) {
-        if (g_file->output) fclose(g_file->output);
+        if (g_file->output && fclose(g_file->output) != 0)
+            perror("Failed to close log file");
         free(g_file);
         g_file = NULL;
     }
+
     g_logger_type = 0;
 }
 
