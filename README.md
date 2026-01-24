@@ -41,12 +41,27 @@ git submodule update --init --recursive
 #include "slogger.h"
 ```
 3. Add all .c files from slogger/ to your build:
+
+С
 ```c
  gcc -o myapp main.c \
-    external/slogger/src/slogger.c \
-    external/slogger/common/ring_buffer.c -pthread
+    your_dir/slogger/src/slogger.c \
+    your_dir/slogger/common/ring_buffer.c -pthread
 ```
+C++ (CMakeLists)
+```c
+file(GLOB SLOGGER_SRC
+    ${PROJECT_SOURCE_DIR}/your_dir/slogger/src/*.c
+    ${PROJECT_SOURCE_DIR}/your_dir/slogger/common/*.c
+)
 
+add_library(slogger STATIC ${SLOGGER_SRC})
+
+target_include_directories(slogger PUBLIC
+    ${PROJECT_SOURCE_DIR}/your_dir/slogger/src
+    ${PROJECT_SOURCE_DIR}/your_dir/slogger/common
+)
+```
 ## Example
 
 *Output of the console logger:*
