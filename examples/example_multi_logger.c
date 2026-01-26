@@ -2,8 +2,8 @@
 
 int main() {
     start_logging_thread();
-    init_consoleLog(stdout);              // Console logging to stdout
-    init_fileLog("logs/log.txt", 0);   // File logging
+    init_consoleLog(stdout);              
+    init_fileLog("logs/log.txt", 0);   
     
     set_log_level(DEBUG);
 
