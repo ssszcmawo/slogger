@@ -1,9 +1,10 @@
 #include "slogger.h"
 
-int main() {
+int main()
+{
     // Initializes file-based logging
     // "logs/log.txt"      -> path to the log file
-    // 1024 * 1024         -> maximum log file size in bytes (1 MB) 
+    // 1024 * 1024         -> maximum log file size in bytes (1 MB)
     start_logging_thread();
     init_fileLog("logs/log.txt", 1024 * 1024);
 

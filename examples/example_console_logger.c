@@ -1,6 +1,7 @@
 #include "slogger.h"
 
-int main() {
+int main()
+{
     // Initializes the logger and sets the output stream
     // stderr is commonly used for logs and error messages
     start_logging_thread();
